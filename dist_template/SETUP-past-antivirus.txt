@@ -1,0 +1,52 @@
+Radiant Plugins (Team Create) - how to install past the antivirus warning
+===================================================================
+
+Why your antivirus may block the download
+-----------------------------------------
+The tool works by loading a small add-on into Radiant while it starts. That is a normal
+technique, but it is also what viruses do, so an unsigned program that does it gets flagged
+by heuristics even when it is clean. It is a false positive. The files were scanned clean
+with Windows Defender before packaging. Only run a copy you got directly from Figglebottom.
+
+Install (about 3 minutes)
+-------------------------
+1. Download the zip (RadiantPlugins-....zip). If the browser or antivirus removes it, tell
+   Windows to trust the folder first (step 2) and download it again into that folder.
+2. BEFORE you unzip, tell Windows to trust the folder you will put it in, otherwise Windows
+   may delete the files as you extract them:
+     - Open Windows Security > Virus & threat protection.
+     - Under Virus & threat protection settings click Manage settings.
+     - Scroll to Exclusions > Add or remove exclusions > Add an exclusion > Folder.
+     - Pick (or make) the folder you will extract into, for example  C:\RadiantPlugins
+3. Unzip the file into that folder.
+4. Open the folder and double-click  Install plugins for the normal launcher.bat  (once), or
+   Launch Radiant with Plugins.bat
+     - If SmartScreen says Windows protected your PC, click More info then Run anyway.
+     - Radiant starts as usual; after the map loads you see a small TEAMCREATE OFF hint.
+5. Read README.txt in the folder for how to host or join a session.
+
+If Windows still removes RadiantPlugins.dll, RadiantPlugins_Launch.exe or a plugin DLL after extracting, it was not
+excluded in step 2: add the folder as an exclusion, then restore the files from
+Windows Security > Protection history, and unzip again.
+
+Report it as a false positive (takes a minute, helps everyone)
+--------------------------------------------------------------
+If Defender did flag a file, submit it at https://www.microsoft.com/wdsi/filesubmission ("Home customer",
+"I believe this file is safe"). Microsoft usually clears a clean file within a day or two, and after that
+nobody else has to do the steps above for that version.
+
+Build speed (BetterBuild, in the Launcher+ plugin)
+-------------------------------------------------
+Separate from the above: Defender also scans every file the build tools open, which slows compiles and
+links (tens of seconds per link right after a Defender update). The launcher's Launcher+ menu can tell
+Defender to skip cod2map64.exe, linker_modtools.exe and snd_convert.exe (Windows asks for administrator
+permission once, and the same menu undoes it). The plugin offers this once, the first time the launcher
+starts with it. It never excludes its own files or any folder.
+The installer (MTPlugins-Setup) offers the same thing as a ticked box, and removes it again on uninstall.
+
+Play Test
+---------
+Defender's heuristics tend to remove BO3LiveBridge.dll, the file Play Test loads into the game: the game then
+starts but never docks into Radiant. The installer's ticked box "Keep Windows Defender from removing Play
+Test's files" excludes only the folder  bin\plugins\PlayTest  and the uninstaller undoes it. By hand: Windows
+Security > Virus & threat protection > Manage settings > Exclusions > Add an exclusion > Folder.

@@ -1,0 +1,143 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!--
+    A Radiant Plugins plugin project. Open this file in Visual Studio 2022 or newer ("Desktop development with C++"),
+    pick Release | x64 and Build. See GETTING_STARTED.md in the SDK folder.
+
+    After a successful build the DLL is copied to <game>\bin\plugins\HelloPlugin\, where the editors load it from.
+    The game folder comes from the TA_TOOLS_PATH environment variable that the Black Ops III mod tools set; if yours
+    is not set, or the copy should go somewhere else, change the settings below (in Visual Studio: right-click the
+    project, Unload Project, Edit, then Reload Project).
+  -->
+  <PropertyGroup Label="UserSettings">
+    <!-- the plugin's name: the DLL name, its folder under bin\plugins, and ModToolsPluginApi::name in the .cpp must all match -->
+    <PluginName>HelloPlugin</PluginName>
+    <!-- the Black Ops III folder (the one that contains bin\Radiant_modtools.exe) -->
+    <Bo3Root Condition="'$(Bo3Root)' == ''">$(TA_TOOLS_PATH)</Bo3Root>
+    <!-- where the built DLL is copied, empty = <Bo3Root>\bin\plugins\<PluginName>\ -->
+    <DeployDir Condition="'$(DeployDir)' == ''"></DeployDir>
+    <!-- false = do not copy the DLL anywhere after a build -->
+    <DeployToGame Condition="'$(DeployToGame)' == ''">true</DeployToGame>
+    <!-- the SDK folder (modtools_plugin.h), empty = the nearest folder above this project that contains it -->
+    <ModToolsSdkDir Condition="'$(ModToolsSdkDir)' == ''">$([MSBuild]::GetDirectoryNameOfFileAbove($(MSBuildThisFileDirectory), modtools_plugin.h))</ModToolsSdkDir>
+  </PropertyGroup>
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <Keyword>Win32Proj</Keyword>
+    <ProjectGuid>{F4B6C8DA-3D5A-4B7C-9EAF-0A2B3C4D5E6F}</ProjectGuid>
+    <RootNamespace>$(PluginName)</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+    <ProjectName>HelloPlugin</ProjectName>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <!-- $(DefaultPlatformToolset) = the toolset of the Visual Studio that builds it (v143 for 2022, v145 for 2026) -->
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>$(DefaultPlatformToolset)</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>$(DefaultPlatformToolset)</PlatformToolset>
+    <WholeProgramOptimization>false</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <!-- Built as part of RadiantPlugins.sln (the plugin system's own repo): output into its build tree, no copy to the game -->
+  <PropertyGroup Condition="Exists('$(SolutionDir)RadiantPlugins.sln')">
+    <InPluginRepo>true</InPluginRepo>
+    <OutDir>$(SolutionDir)build\$(Configuration)\plugins\$(PluginName)\</OutDir>
+    <IntDir>$(SolutionDir)build\obj\$(ProjectName)\$(Configuration)\</IntDir>
+  </PropertyGroup>
+  <!-- Built on its own (the SDK): output next to the project, then copied to the game by DeployPlugin below -->
+  <PropertyGroup Condition="'$(InPluginRepo)' != 'true'">
+    <OutDir>$(MSBuildThisFileDirectory)bin\$(Configuration)\</OutDir>
+    <IntDir>$(MSBuildThisFileDirectory)obj\$(Configuration)\</IntDir>
+    <Bo3Root Condition="'$(Bo3Root)' != ''">$([MSBuild]::EnsureTrailingSlash('$(Bo3Root.Trim())'))</Bo3Root>
+    <DeployDir Condition="'$(DeployDir)' == '' and '$(Bo3Root)' != ''">$(Bo3Root)bin\plugins\$(PluginName)\</DeployDir>
+    <DeployDir Condition="'$(DeployDir)' != ''">$([MSBuild]::EnsureTrailingSlash('$(DeployDir)'))</DeployDir>
+    <!-- F5 starts Radiant, the plugin host is then loaded by the d3d9.dll loader ("Install plugins for the normal launcher.bat") -->
+    <LocalDebuggerCommand>$(Bo3Root)bin\Radiant_modtools.exe</LocalDebuggerCommand>
+    <LocalDebuggerWorkingDirectory>$(Bo3Root)bin\</LocalDebuggerWorkingDirectory>
+    <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>
+  </PropertyGroup>
+  <PropertyGroup>
+    <TargetName>$(PluginName)</TargetName>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <SDLCheck>true</SDLCheck>
+      <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <PreprocessorDefinitions>_WINDOWS;_USRDLL;WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ModToolsSdkDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <DisableSpecificWarnings>4996;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalDependencies>user32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <!-- /MT (static runtime): the DLL needs no Visual C++ redistributable on the user's PC -->
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <PreprocessorDefinitions>_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <PreprocessorDefinitions>NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+    </ClCompile>
+    <Link>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="HelloPlugin.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="$(ModToolsSdkDir)\modtools_plugin.h" />
+    <ClInclude Include="$(ModToolsSdkDir)\modtools_plugin.hpp" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+
+  <Target Name="CheckRadiantSdk" BeforeTargets="ClCompile">
+    <Error Condition="'$(ModToolsSdkDir)' == '' or !Exists('$(ModToolsSdkDir)\modtools_plugin.h')"
+           Text="modtools_plugin.h was not found in any folder above this project. Keep the project inside the SDK folder, or set ModToolsSdkDir at the top of $(MSBuildThisFile) to the SDK folder." />
+  </Target>
+
+  <!-- Copy the built DLL (and its .pdb, for debugging) to where the editors load plugins from -->
+  <Target Name="DeployPlugin" AfterTargets="Build" Condition="'$(InPluginRepo)' != 'true' and '$(DeployToGame)' == 'true'">
+    <Warning Condition="'$(DeployDir)' == ''"
+             Text="Not copied to the game: the TA_TOOLS_PATH environment variable is not set. Set Bo3Root at the top of $(MSBuildThisFile) to your Black Ops III folder, or copy $(TargetPath) to &lt;game&gt;\bin\plugins\$(PluginName)\ yourself." />
+    <MakeDir Condition="'$(DeployDir)' != ''" Directories="$(DeployDir)" ContinueOnError="true" />
+    <Copy Condition="'$(DeployDir)' != ''" SourceFiles="$(TargetPath);$(OutDir)$(TargetName).pdb" DestinationFolder="$(DeployDir)" Retries="0" ContinueOnError="true" />
+    <Error Condition="'$(DeployDir)' != '' and '$(MSBuildLastTaskResult)' == 'false'"
+           Text="Built, but could not copy $(TargetFileName) to $(DeployDir). If Radiant or APE is running with the plugin loaded, untick $(PluginName) in the Plugins window (Ctrl+Shift+P), build again, then tick it." />
+    <Message Condition="'$(DeployDir)' != '' and '$(MSBuildLastTaskResult)' != 'false'" Importance="high"
+             Text="$(PluginName) copied to $(DeployDir)" />
+  </Target>
+</Project>

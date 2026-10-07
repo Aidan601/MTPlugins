@@ -1,0 +1,915 @@
+
+void GenerateUI( asset Asset )
+{
+	// No UI entries
+
+	Asset.AddEntry_Combo( "configstringFileType", "WEAPONFILE" ).Show( false );
+	Asset.AddEntry_Float( "adsTransBlendTime", 0.1, 0, 5 ).Show( false );
+	Asset.AddEntry_Int( "twoHanded", 1, 0, 1 ).Show( false );
+	Asset.AddEntry_Float( "duckedSprintOfsF", -3, -300, 300 ).Show( false );
+	Asset.AddEntry_Float( "duckedSprintOfsR", -5, -300, 300 ).Show( false );
+	Asset.AddEntry_Float( "duckedSprintOfsU", -5, -300, 300 ).Show( false );
+	Asset.AddEntry_Float( "duckedSprintRotP", 0, -300, 300 ).Show( false );
+	Asset.AddEntry_Float( "duckedSprintRotY", 0, -300, 300 ).Show( false );
+	Asset.AddEntry_Float( "duckedSprintRotR", 0, -300, 300 ).Show( false );
+	Asset.AddEntry_Float( "duckedSprintScale", 1, 0.01, 10 ).Show( false );
+	Asset.AddEntry_Float( "adsOverlayAlphaScale", 1, 1, 100 ).Show( false );
+	
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+	
+	// Misc 
+
+	Asset.BeginCategory( "Misc" );
+	{
+		Asset.AddEntry_String( "displayName", "" ).SetTitle( "Display Name" ).SetToolTip( "Localization alias for weapon name displayed on HUD in game." );
+		Asset.AddEntry_String( "modeName", "" ).SetTitle( "Mode Name" ).SetToolTip( "Localization alias for selective fire mode text displayed on HUD in game." );
+		Asset.AddEntry_String( "parentWeaponName", "" ).SetTitle( "Stat Name" ).SetToolTip( "Name of parent weapon for weapon stats e.g. parent weapons for dogs_bite_mp is dogs_mp." );
+		Asset.AddEntry_Combo( "playerAnimType", "default | none | other | sniper | radio | dualwield | riotshield | beltfed | g11 | rearclip | turned" ).SetTitle( "Player Anim Type" ).SetToolTip( "Select an Player Anim Type - specifies 'playerAnimType' in playeranim.script" );
+		Asset.AddEntry_String( "altWeapon", "" ).SetTitle( "Alt Weapon Name" ).SetToolTip( "Weapon to switch to when this weapon's selective fire mode is switched in the game." );
+		Asset.AddEntry_String( "DualWieldWeapon", "" ).SetTitle( "Dual Wield Weapon Name" ).SetToolTip( "Weapon that is dual wielded with this one." );
+		Asset.AddEntry_String( "AIOverlayDescription", "" ).SetTitle( "AI Description" ).SetToolTip( "Localization alias for text shown when crosshair is placed over a friendly. Eg. Rifleman, Submachine Gunner, etc." );
+		Asset.AddEntry_Combo( "inventoryType", "primary | offhand | item | altmode | melee | dwlefthand" ).SetTitle( "Inventory" ).SetToolTip( "Select what sort of inventory this weapon is." );
+		Asset.AddEntry_Combo( "weaponType", "bullet | binoculars | riotshield | melee" ).SetTitle( "Type" ).SetToolTip( "Select a weapon type." );
+		Asset.AddEntry_Combo( "weaponClass", "rifle | mg | smg | pistol | item | spread" ).SetTitle( "Class" ).SetToolTip( "Select an appropriate class for this weapon." );		
+		Asset.AddEntry_Combo( "penetrateType", "none | small | medium | large" ).SetTitle( "Penetration" ).SetToolTip( "Type of bullet penetration." );
+		Asset.AddEntry_Combo( "impactType", "bullet_small | none | bullet_large | bullet_ap | shotgun | grenade_bounce | grenade_explode | rocket_explode | projectile_dud | mortar_shell | tank_shell" ).SetTitle( "Impact Type" ).SetToolTip( "The impact type, used to play impact effects based on surfacetype" );		
+		Asset.AddEntry_Combo( "fireType", "Full Auto | Single Shot | Burst | Auto Burst | Charge Shot | Charge Shot Burst | Charge Shot Auto Burst" ).SetTitle( "Fire Type" ).SetToolTip( "Behavior of the weapon when the trigger is held down." );				
+		Asset.AddEntry_Combo( "clipType", "bottom | top | left | dp28 | ptrs | lmg" ).SetTitle( "Clip Type" ).SetToolTip( "Determines how the clip gets inserted into the weapon." );
+		Asset.AddEntry_CheckBox( "nonStowedWeapon", false ).SetTitle( "Non Stowed Weapon" ).SetToolTip( "This weapon will not be drawn when it is stowed (basic knife for example)" );
+		Asset.AddEntry_CheckBox( "skipBattlechatterKill", false ).SetTitle( "Skip Battlechatter Kill" ).SetToolTip( "This weapon will not 'kill' battlechatter to play" );
+		Asset.AddEntry_CheckBox( "skipBattlechatterReload", false ).SetTitle( "Skip Battlechatter Reload" ).SetToolTip( "This weapon will not 'reload' battlechatter to play" );
+		Asset.AddEntry_CheckBox( "skipLowAmmoVox", false ).SetTitle( "skip Low Ammo Vox" ).SetToolTip( "This weapon should skip playing low ammo warning voiceovers" );
+		Asset.AddEntry_CheckBox( "isHybridWeapon", false ).SetTitle( "Is HybridWeapon" ).SetToolTip( "This weapon is one half of a hybrid pairing" );
+	}
+	
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+ 	
+	// Ammo Options
+
+	Asset.BeginCategory( "Ammo Options" );
+	{
+		Asset.AddEntry_CheckBox( "rifleBullet", true ).SetTitle( "Rifle Bullet" ).SetToolTip( "Uses pistol bullets if not checked. Rifle bullets apply damage to the highest priority hit location (locationdamage.gdt) along the bullet's path, and will go through people. Pistol bullets don't." );
+		Asset.AddEntry_CheckBox( "armorPiercing", false ).SetTitle( "Armor Piercing" ).SetToolTip( "Does damage to armored targets if checked." );
+	}
+	
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+ 	
+	// Type Options
+
+	Asset.BeginCategory( "Type Options" );
+	{
+		Asset.AddEntry_CheckBox( "boltAction", false ).SetTitle( "Bolt Action" ).SetToolTip( "Turn this on for bolt-action weapons only. Animation control." );
+		Asset.AddEntry_CheckBox( "dualWield", false ).SetTitle( "Dual Wield" ).SetToolTip( "This a dual wield weapon." );
+	}
+	
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+ 
+	// Reload Options
+	
+	Asset.BeginCategory( "Reload Options" );
+	{
+		Asset.AddEntry_CheckBox( "noPartialReload", false ).SetTitle( "No Partial Reload" ).SetToolTip( "When noPartialReload is set for a weapon, it can not be reloaded unless reloadAmmoAdd amount of ammo can be put into the gun. If reloadAmmoAdd is 0, it's treated as the weapon's clip size." );
+		Asset.AddEntry_CheckBox( "segmentedReload", false ).SetTitle( "Segmented Reload" ).SetToolTip( "Turn on for weapons that reload X rounds at a time (Lee-Enfield, bolt-action sniper rifles), set reload amounts in Reload Ammo Add and Reload Start Add." );	
+		Asset.AddEntry_CheckBox( "enhanced", false ).SetTitle( "Enhanced" ).SetToolTip( "This weapon will be an upgraded version of the ones with the same ammo type." );
+		Asset.AddEntry_CheckBox( "rechamberWhileAds", true ).SetTitle( "ADS Rechamber" ).SetToolTip( "Weapon can be rechambered while in ADS." );
+		Asset.AddEntry_CheckBox( "noADSAutoReload", false ).SetTitle( "No ADS Auto-Reload" ).SetToolTip( "Disallow auto-reloading while the weapon is in ADS." );
+	}
+	
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+ 	
+	// ADS Options
+	
+	Asset.BeginCategory( "ADS Options" );
+	{
+		Asset.AddEntry_CheckBox( "aimDownSight", false ).SetTitle( "ADS" ).SetToolTip( "Must be turned on for proper viewmodel appearance of a weapon that can be Aimed Down the Sight (ADS)." );
+		Asset.AddEntry_CheckBox( "adsFire", false ).SetTitle( "ADS Fire Only" ).SetToolTip( "Can only be fired ADS.  Firing from the hip brings up ADS." );
+		Asset.AddEntry_CheckBox( "noAdsWhenMagEmpty", false ).SetTitle( "No ADS With Empty Magazine" ).SetToolTip( "Disallow ADS when magazine is empty." );
+	}
+	
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+ 	
+	// Miscellaneous Options
+	
+	Asset.BeginCategory( "Miscellaneous Options" );
+	{
+		Asset.AddEntry_CheckBox( "canUseUnderWater", true ).SetTitle( "Can Use Under Water" ).SetToolTip( "The weapon can be used under water." );
+		Asset.AddEntry_CheckBox( "blocksProne", false ).SetTitle( "Cannot Go Prone" ).SetToolTip( "The player cannot go prone when they have this weapon equiped." );
+		Asset.AddEntry_CheckBox( "avoidDropCleanup", false ).SetTitle( "No Auto-Cleanup of Dropped Weapon" ).SetToolTip( "Avoid having dropped weapons of this type deleted to make room for new ones." );
+	}
+	
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+ 	
+	// Attachment Perks
+	
+	Asset.BeginCategory( "Attachment Perks" );
+	{
+		Asset.AddEntry_CheckBox( "fullMetalJacket", false ).SetTitle( "FMJ" ).SetToolTip( "Uses the Full Metal Jacket attachment." ).Show( false );
+		Asset.AddEntry_CheckBox( "hollowPoint", false ).SetTitle( "Hollow Point" ).SetToolTip( "Uses the Hollow Point attachment." ).Show( false );
+		Asset.AddEntry_CheckBox( "rapidFire", false ).SetTitle( "Rapid Fire" ).SetToolTip( "Uses the Rapid Fire attachment." ).Show( false );
+		Asset.AddEntry_CheckBox( "silenced", false ).SetTitle( "Silenced" ).SetToolTip( "This weapon is considered silenced." );
+	}
+	
+
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+ 	
+	// Weapon Perks
+	
+	Asset.AddEntry_Text( "mods", "" ).SetTitle( "Weapon Perks" ).SetHints( "NOWARNINGS" ).SetToolTip( "specialties that this weapon will have, one per line" ).Show( false );
+	
+	Asset.BeginCategory( "Weapon Perks" );
+	{
+		Asset.ShowEntry( "mods" );
+	}
+	
+
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+ 	
+	// Crosshair Options
+	
+	Asset.BeginCategory( "Crosshair Options" );
+	{
+		Asset.AddEntry_Float( "enemyCrosshairRange", 1600, 0.0, 10000 ).SetTitle( "Enemy Crosshair Range" ).SetToolTip( "The range in at which friendly names appear and friendly or enemy changes your crosshair color." );
+		Asset.AddEntry_CheckBox( "crosshairColorChange", true ).SetTitle( "Crosshair Color Change" ).SetToolTip( "Change crosshair color if pointing at friendly or enemy" );
+	}
+	
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+	
+	// Heatseeking specific ( unused )
+	
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+ 	
+	// Movement, Sprint, Turning
+	
+	Asset.BeginCategory( "Movement, Sprint, Turning" );
+	{
+		Asset.AddEntry_Float( "moveSpeedScale", 1.0, 0.0, 5.0 ).SetTitle( "Move Speed Scale" ).SetToolTip( "When using this weapon, player movement speed is multiplied by this amount." );
+		Asset.AddEntry_Float( "adsMoveSpeedScale", 1.0, 0.0, 5.0 ).SetTitle( "ADS Move Speed Scale" ).SetToolTip( "When using this weapon and in ADS, player movement speed is multiplied by this amount." );
+		Asset.AddEntry_Float( "jumpMoveSpeedScale", 1.0, 0.0, 5.0 ).SetTitle( "Jump Move Speed Scale" ).SetToolTip( "When using this weapon and jumping, player movement speed is multiplied by this amount." );
+		Asset.AddEntry_Float( "firingSpeedScale", 0.0, 0.0, 5.0 ).SetTitle( "Firing Speed Scale" ).SetToolTip( "When firing this weapon, player movement speed is multiplied by this amount (if non-zero, normal scalars are used otherwise)." );
+		Asset.AddEntry_Float( "adsFiringSpeedScale", 0.0, 0.0, 5.0 ).SetTitle( "ADS Firing Speed Scale" ).SetToolTip( "When firing this weapon and in ADS, player movement speed is multiplied by this amount (if non-zero, normal scalars are used otherwise)." );
+		Asset.AddEntry_Float( "sprintFiringSpeedScale", 0.0, 0.0, 5.0 ).SetTitle( "Sprint Firing Speed Scale" ).SetToolTip( "When firing this weapon and in sprint, player movement speed is multiplied by this amount (if non-zero, normal scalars are used otherwise)." );
+		Asset.AddEntry_Float( "adsMoveSpeedTransitionTimeIn", 0.0, 0.0, 5.0 ).SetTitle( "ADS Move Speed Transition Time In" ).SetToolTip( "Time to lerp from regular MoveSpeedScale to ADS MoveSpeedScale (or the Firing variants when firing). 0 will behave like games previous to BO3" );
+		Asset.AddEntry_Float( "adsMoveSpeedTransitionTimeOut", 0.0, 0.0, 5.0 ).SetTitle( "ADS Move Speed Transition Time Out" ).SetToolTip( "Time to lerp to regular MoveSpeedScale from ADS MoveSpeedScale (or the Firing variants when firing). 0 will behave like games previous to BO3" );
+		Asset.AddEntry_Float( "sprintDurationScale", 1, 0.0, 5.0 ).SetTitle( "Sprint Duration Scale" ).SetToolTip( "When sprinting with this weapon, sprint duration is multiplied by this amount." );
+		Asset.AddEntry_Int( "gunMaxPitch", 30, 0, 99 ).SetTitle( "Max Gun Pitch" ).SetToolTip( "Maximum allowed vertical ascent of the viewmodel due to recoil (degrees)." );
+		Asset.AddEntry_Int( "gunMaxYaw", 30, 0, 99 ).SetTitle( "Max Gun Yaw" ).SetToolTip( "Maximum allowed horizontal travel of the viewmodel due to recoil (degrees)." );
+	}
+	
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+ 	
+	// Flamethrower Details ( unused )
+	
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+ 	
+	// Aim Assist ( Console Only )
+	
+	Asset.BeginCategory( "Aim Assist ( Console Only )" );
+	{
+		Asset.AddEntry_Float( "autoAimRange", 1600, 0, 8000 ).Show( false ).SetTitle( "Auto Aim Range" ).SetToolTip( "(Console only.) The range in world units up to which entering ADS will lock-on to enemies. (1 world unit = 1 inch)" );
+		Asset.AddEntry_Float( "aimAssistRange", 3200, 0, 8000 ).Show( false ).SetTitle( "Aim Assist Range" ).SetToolTip( "(Console only.) The range in world units up to which the crosshair will stick to targets. (1 world unit = 1 inch) " );
+		Asset.AddEntry_Float( "aimAssistRangeAds", 3200, 0, 8000 ).Show( false ).SetTitle( "Aim Assist Range ADS" ).SetToolTip( "(Console only.) The range in world units up to which the crosshair will stick to targets in ADS. (1 world unit = 1 inch)" );
+	}
+	
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+ 	
+	// Ammunition
+	
+	Asset.BeginCategory( "Ammunition" );
+	{
+		Asset.AddEntry_Int( "burstCount", 1, 1, 7 ).SetTitle( "Burst Count" ).SetToolTip( "Specifies how many bullets shot by either regular or auto burst fire." );
+		Asset.AddEntry_CheckBox( "sharedAmmo", false ).SetTitle( "Shared Ammo" ).SetToolTip( "Sets this gun to use a shared ammo pool" );
+		Asset.AddEntry_CheckBox( "unlimitedAmmo", false ).SetTitle("Unlimited Ammo" ).SetToolTip( "This weapon does not use ammo" );
+		Asset.AddEntry_String( "ammoName", "" ).SetTitle( "Ammo Name" ).SetToolTip( "Allows different weapons to share the same ammo pool." );
+		Asset.AddEntry_String( "clipName", "" ).SetTitle( "Clip Name" ).SetToolTip( "Allows different weapons to share clips. Used for weapons that have a selective fire option, and would therefore need to use the same type of clip." );
+		Asset.AddEntry_Int( "clipSize", 10, 0, 999 ).SetTitle( "Clip Size" ).SetToolTip( "Specifies how many bullets per clip/magazine." );
+		Asset.AddEntry_Int( "maxAmmo", 100, 0, 999 ).SetStep( 10 ).SetTitle( "Max Stock Ammo" ).SetToolTip( "Max stock ammo the player can collect for this weapon, clip isn't reflected in this number. No effect on AI.  Affected by 'Ammo Clip Count Relative' field." );
+		Asset.AddEntry_Int( "startAmmo", 0, 0, 1000 ).SetTitle( "Start Ammo" ).SetToolTip( "How much ammo the player gets when starting with this weapon. One clip/magazine from this amount will be already in the weapon. No effect on AI.  Affected by 'Ammo Clip Count Relative' field." );
+		Asset.AddEntry_Int( "dropAmmoMin", 0, 0, 999 ).SetTitle( "Drop Min" ).SetToolTip( "When dropped by AI/player/hand-placed in editor, contains at least this much ammo. Not limited to real-life clip/magazine size.  Affected by 'Ammo Clip Count Relative' field." );	
+		Asset.AddEntry_Int( "dropAmmoMax", 0, 0, 999 ).SetTitle( "Drop Max" ).SetToolTip( "When dropped by AI/player/hand-placed in editor, contains no more than this much ammo. Not limited to real-life clip/magazine size.  Affected by 'Ammo Clip Count Relative' field." );
+		Asset.AddEntry_Int( "dropClipAmmoMin", 0, 0, 1000 ).SetTitle( "Drop Clip Min" ).SetToolTip( "When dropped by AI/player/hand-placed in editor, contains at least this much ammo in the clip." );
+		Asset.AddEntry_Int( "dropClipAmmoMax", 1000, 0, 1000 ).SetTitle( "Drop Clip Max" ).SetToolTip( "When dropped by AI/player/hand-placed in editor, contains no more than this much ammo in the clip." );
+		Asset.AddEntry_Int( "shotCount", 1, 1, 20 ).SetTitle( "Shotgun Shot Count" ).SetToolTip( "Specifies how many chunks per shotgun blast." );
+		Asset.AddEntry_Int( "reloadAmmoAdd", 0, 0, 999 ).SetTitle( "Reload Ammo Add" ).SetToolTip( "For weapons with Segmented Reload turned on. Amount to add when reloading with some amount of bullets still remaining in the weapon." );	
+		Asset.AddEntry_Int( "reloadStartAdd", 0, 0, 999 ).SetTitle( "Reload Start Add" ).SetToolTip( "For weapons with Segmented Reload turned on. Amount to add for the first reload segment (ie: when weapon is empty.)" );	
+		Asset.AddEntry_Float( "lowAmmoWarningThreshold", 0.33, 0, 1 ).SetStep( 0.1 ).SetTitle( "Clip-Ammo Low Warning %" ).SetToolTip( "The game optionally displays low-ammo warnings when remaining clip ammo goes below this percentage." );
+		Asset.AddEntry_CheckBox( "cancelAutoHolsterWhenEmpty", false ).SetTitle( "Do Not Auto-Holster When Empty" ).SetToolTip( "When weapons are empty, they are normally auto-swapped to the next usable weapon in the player's inventory.  This disables that." );
+		Asset.AddEntry_CheckBox( "suppressAmmoReserveDisplay", false ).SetTitle( "Hide Display of Reserve Ammo" ).SetToolTip( "Hides the reserve (stock) ammo count on the HUD ammo counter; only the clip is shown." );
+	}
+	
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+ 	
+	// Stack Fire ( unused )
+	
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+ 	
+	// Charge Shot	
+
+	Asset.BeginCategory( "Charge Shot" );
+	{
+		Asset.AddEntry_CheckBox( "chargeShotFireWhenQueueReachesMax", false ).SetTitle( "Charge Shot Fire When Queue Reaches Max" ).SetToolTip( "Whether to fire the charge shot weapon automatically when it reaches max bullet queue" );
+		Asset.AddEntry_CheckBox( "chargeShotCancelIfTriggerReleasedBeforeMinTime", false ).SetTitle( "Charge Shot Cancel If Trigger Released Before Min Time" ).SetToolTip( "If the trigger is released before min time is reached, cancel the shot" );
+		Asset.AddEntry_Int( "chargeShotMaxLevel", 0, 0, 10 ).SetTitle( "Charge Shot Number Of Levels" ).SetToolTip( "Specifies how many levels exist for the charge shot.  Need one weapon per level. This value should be the same in all the weapons." );
+		Asset.AddEntry_Float( "chargeShotMaxTime", 0, 0, 10000 ).SetTitle( "Charge Shot Total Time" ).SetToolTip( "Total time needed to fully charge the shot.  This value should be the same in all the weapons." );
+		Asset.AddEntry_Float( "chargeShotMinTime", 0, 0, 10 ).SetStep( 0.05 ).SetTitle( "Minimum Charge Shot Time" ).SetToolTip( "Minimum length of the charge shot before it can be fired" );
+	}
+	
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+ 	
+	// Reloadable Fuel Tank	( unused )
+	
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+ 	
+	// Overheating ( unused )
+
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+ 	
+	// Auto turret scanning ( unused )
+	
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+ 	
+	// Damage
+	
+	Asset.BeginCategory( "Damage Ranges", 0.7, 0.1, 0.1, "Icon_health.png" );
+	{
+		Asset.AddEntry_Int( "damage", 30, 0, 1000 ).SetTitle( "Damage 1 (MAX)" ).SetToolTip( "Damage per-bullet, applied up to range distance. Damage is constant from 0 to range distance" );
+		Asset.AddEntry_Float( "maxDamageRange", 15000, 1, 15000 ).SetStep( 120 ).SetTitle( "Range 1" ).SetToolTip( "Range in world units, up to which range damage is applied. (1 world unit = 1 inch)" );
+		Asset.AddEntry_Int( "damage2", 0, 0, 1000 ).SetTitle( "Damage 2" ).SetToolTip( "Damage per-bullet, applied up to range distance. Damage is linear from previous damage range to this damage range." );
+		Asset.AddEntry_Float( "damageRange2", 0, 0, 15000 ).SetStep( 120 ).SetTitle( "Range 2" ).SetToolTip( "Range in world units, up to which range damage is applied. (1 world unit = 1 inch)" );
+		Asset.AddEntry_Int( "damage3", 0, 0, 1000 ).SetTitle( "Damage 3" ).SetToolTip( "Damage per-bullet, applied up to range distance. Damage is linear from previous damage range to this damage range." );
+		Asset.AddEntry_Float( "damageRange3", 0, 0, 15000 ).SetStep( 120 ).SetTitle( "Range 3" ).SetToolTip( "Range in world units, up to which range damage is applied. (1 world unit = 1 inch)" );
+		Asset.AddEntry_Int( "damage4", 0, 0, 1000 ).SetTitle( "Damage 4" ).SetToolTip( "Damage per-bullet, applied up to range distance. Damage is linear from previous damage range to this damage range." );
+		Asset.AddEntry_Float( "damageRange4", 0, 0, 15000 ).SetStep( 120 ).SetTitle( "Range 4" ).SetToolTip( "Range in world units, up to which range damage is applied. (1 world unit = 1 inch)" );
+		Asset.AddEntry_Int( "damage5", 0, 0, 1000 ).SetTitle( "Damage 5" ).SetToolTip( "Damage per-bullet, applied up to range distance. Damage is linear from previous damage range to this damage range." );
+		Asset.AddEntry_Float( "damageRange5", 0, 0, 15000 ).SetStep( 120 ).SetTitle( "Range 5" ).SetToolTip( "Range in world units, up to which range damage is applied. (1 world unit = 1 inch)" );
+		Asset.AddEntry_Int( "minDamage", 30, 0, 1000 ).SetTitle( "Damage 6 (MIN)" ).SetToolTip( "Damage per-bullet, applied up to and beyond range distance. Damage is constant past range distance" );
+		Asset.AddEntry_Float( "minDamageRange", 16000, 1, 16000 ).SetStep( 120 ).SetTitle( "Range 6" ).SetToolTip( "Range in world units, up to and beyond which the range damage is applied. (1 world unit = 1 inch)" );
+
+		Asset.AddEntry_Int( "playerDamage", 30, 0, 1000 ).SetTitle( "AI-player damage" ).SetToolTip( "Damage done to player when hit by an AI" );
+	}
+	
+		// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+
+		// Multishot Damage
+	
+	Asset.BeginCategory( "Multishot Base Damage Ranges", 0.7, 0.1, 0.1, "Icon_health.png" );
+	{
+		Asset.AddEntry_Int( "multishotBaseDamage1", 0, 0, 1000 ).SetTitle( "Multishot Base Damage 1 (MAX)" ).SetToolTip( "Base damage applied when hit with a multishot projectile (shotgun). Applied once no matter how many pellets hit, added to individual shot damage, applied up to range distance. Damage is constant from 0 to range distance" );
+		Asset.AddEntry_Float( "multishotBaseDamageRange1", 15000, 1, 15000 ).SetStep( 120 ).SetTitle( "Multishot Base Range 1" ).SetToolTip( "Range in world units, up to which range damage is applied. (1 world unit = 1 inch)" );
+		Asset.AddEntry_Int( "multishotBaseDamage2", 0, 0, 1000 ).SetTitle( "Multishot Base Damage 2" ).SetToolTip( "Base damage applied when hit with a multishot projectile (shotgun). Applied once no matter how many pellets hit, added to individual shot damage, applied up to range distance. Damage is linear from previous damage range to this damage range." );
+		Asset.AddEntry_Float( "multishotBaseDamageRange2", 0, 0, 15000 ).SetStep( 120 ).SetTitle( "Multishot Base Range 2" ).SetToolTip( "Range in world units, up to which range damage is applied. (1 world unit = 1 inch)" );
+		Asset.AddEntry_Int( "multishotBaseDamage3", 0, 0, 1000 ).SetTitle( "Multishot Base Damage 3" ).SetToolTip( "Base damage applied when hit with a multishot projectile (shotgun). Applied once no matter how many pellets hit, added to individual shot damage, applied up to range distance. Damage is linear from previous damage range to this damage range." );
+		Asset.AddEntry_Float( "multishotBaseDamageRange3", 0, 0, 15000 ).SetStep( 120 ).SetTitle( "Multishot Base Range 3" ).SetToolTip( "Range in world units, up to which range damage is applied. (1 world unit = 1 inch)" );
+		Asset.AddEntry_Int( "multishotBaseDamage4", 0, 0, 1000 ).SetTitle( "Multishot Base Damage 4" ).SetToolTip( "Base damage applied when hit with a multishot projectile (shotgun). Applied once no matter how many pellets hit, added to individual shot damage, applied up to range distance. Damage is linear from previous damage range to this damage range." );
+		Asset.AddEntry_Float( "multishotBaseDamageRange4", 0, 0, 15000 ).SetStep( 120 ).SetTitle( "Multishot Base Range 4" ).SetToolTip( "Range in world units, up to which range damage is applied. (1 world unit = 1 inch)" );
+		Asset.AddEntry_Int( "multishotBaseDamage5", 0, 0, 1000 ).SetTitle( "Multishot Base Damage 5" ).SetToolTip( "Base damage applied when hit with a multishot projectile (shotgun). Applied once no matter how many pellets hit, added to individual shot damage, applied up to range distance. Damage is linear from previous damage range to this damage range." );
+		Asset.AddEntry_Float( "multishotBaseDamageRange5", 0, 0, 15000 ).SetStep( 120 ).SetTitle( "Multishot Base Range 5" ).SetToolTip( "Range in world units, up to which range damage is applied. (1 world unit = 1 inch)" );
+		Asset.AddEntry_Int( "multishotBaseDamage6", 0, 0, 1000 ).SetTitle( "Multishot Base Damage 6 (MIN)" ).SetToolTip( "Base damage applied when hit with a multishot projectile (shotgun). Applied once no matter how many pellets hit, added to individual shot damage, applied up to and beyond range distance. Damage is constant past range distance" );
+		Asset.AddEntry_Float( "multishotBaseDamageRange6", 16000, 1, 16000 ).SetStep( 120 ).SetTitle( "Multishot Base Range 6" ).SetToolTip( "Range in world units, up to and beyond which the range damage is applied. (1 world unit = 1 inch)" );
+		Asset.AddEntry_Int( "multishotBasePlayerDamage", 0, 0, 10000 ).SetTitle( "AI Multishot Base Damage" ).SetToolTip( "Damage done when an AI is shooting the weapon." );
+	}
+	
+	
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+ 	
+	// Tracer
+	
+	Asset.BeginCategory( "Tracer" );
+	{
+		Asset.AddEntry_AssetCombo( "tracerType", "tracer" ).SetTitle( "Tracer Type" ).SetToolTip( "Tracer asset drawn for this weapon's bullets as seen by the shooter and friendlies." );
+		Asset.AddEntry_AssetCombo( "enemyTracerType", "tracer" ).SetTitle( "Enemy tracer Type" ).SetToolTip( "Tracer asset drawn for this weapon's bullets as seen by enemies of the shooter. Empty uses Tracer Type." );
+		Asset.AddEntry_AssetCombo( "underwaterTracerType", "tracer" ).SetTitle( "Underwater tracer Type" ).SetToolTip( "Tracer asset drawn for bullets travelling under water." );
+	}
+
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+	
+	// Indicators ( unused )
+	
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+	
+	// Projectile ( unused )
+	
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+ 	
+	// Location Damage
+	
+	Asset.BeginCategory( "Location Damage" );
+	{
+		Asset.AddEntry_Float( "locNone", 1, 0, 10 ).Show( false );
+		Asset.AddEntry_Float( "locHelmet", 4, 0, 10 ).Show( false );
+		Asset.AddEntry_Float( "locHead", 4, 0, 10 ).Show( false );
+		Asset.AddEntry_Float( "locNeck", 5, 0, 10 ).Show( false );
+		Asset.AddEntry_Float( "locTorsoUpper", 1, 0, 10 ).Show( false );
+		Asset.AddEntry_Float( "locTorsoLower", 0.9, 0, 10 ).Show( false );
+		Asset.AddEntry_Float( "locLeftArmUpper", 0.8, 0, 10 ).Show( false );
+		Asset.AddEntry_Float( "locRightArmUpper", 0.8, 0, 10 ).Show( false );
+		Asset.AddEntry_Float( "locLeftArmLower", 0.6, 0, 10 ).Show( false );
+		Asset.AddEntry_Float( "locRightArmLower", 0.6, 0, 10 ).Show( false );
+		Asset.AddEntry_Float( "locLeftHand", 0.4, 0, 10 ).Show( false );
+		Asset.AddEntry_Float( "locRightHand", 0.4, 0, 10 ).Show( false );
+		Asset.AddEntry_Float( "locLeftLegUpper", 0.8, 0, 10 ).Show( false );
+		Asset.AddEntry_Float( "locRightLegUpper", 0.8, 0, 10 ).Show( false );
+		Asset.AddEntry_Float( "locLeftLegLower", 0.6, 0, 10 ).Show( false );
+		Asset.AddEntry_Float( "locRightLegLower", 0.6, 0, 10 ).Show( false );
+		Asset.AddEntry_Float( "locLeftFoot", 0.4, 0, 10 ).Show( false );
+		Asset.AddEntry_Float( "locRightFoot", 0.4, 0, 10 ).Show( false );
+		Asset.AddEntry_Float( "locGun", 0, 0, 10 ).Show( false );
+	}
+		
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+ 	
+	// State Timers
+	
+	Asset.BeginCategory( "State Timers" );
+	{
+		Asset.AddEntry_Float( "fireTime", 0.1, 0, 10 ).SetStep( 0.05 ).SetTitle( "Fire" ).SetToolTip( "Rate of fire in seconds per round. It's good to keep this in multiples of 0.016 for sound. If 0.016 then it's 3750 rounds a minute." );
+		Asset.AddEntry_Float( "lastFireTime", 0, 0, 10 ).SetStep( 0.05 ).SetTitle( "Last Shot" ).SetToolTip( "Rate of fire in seconds per round for the last bullet. If zero, the standard fire rate is applied. It's good to keep this in multiples of 0.016 for sound. If 0.016 then it's 3750 rounds a minute." );
+		Asset.AddEntry_Float( "fireDelay", 0.1, 0, 10 ).SetStep( 0.05 ).SetTitle( "Fire Delay" ).SetToolTip( "Delay in seconds between pressing the fire button and the weapon actually firing." );
+		Asset.AddEntry_Float( "holdFireTime", 0.1, 0, 10 ).SetStep( 0.05 ).SetTitle( "Hold Fire" ).SetToolTip( "Length of the hold fire (pullback) animation." );
+		Asset.AddEntry_Float( "burstFireDelay", 0.2, 0, 10 ).SetStep( 0.05 ).SetTitle( "Burst Fire Delay" ).SetToolTip( "Delay in seconds between burst fires.  This is in addition to the fire time from the last shot." );
+		Asset.AddEntry_Float( "reloadTime", 2, 0, 10 ).SetStep( 0.05 ).SetTitle( "Reload" ).SetToolTip( "The number of seconds over which the non-empty reload animation will be played.  In segmented reload weapons, this is the animation that loops to give the player ammo." );
+		Asset.AddEntry_Float( "reloadEmptyTime", 2, 0, 10 ).SetStep( 0.05 ).SetTitle( "Reload Empty Time" ).SetToolTip( "The number of seconds over which the empty reload animation will be played." );
+		Asset.AddEntry_Float( "reloadAddTime", 0, 0, 10 ).SetStep( 0.05 ).SetTitle( "Reload Add" ).SetToolTip( "During an partial reload, when the gun will literally get more ammo (ammo counter fills up)." );
+		Asset.AddEntry_Float( "reloadEmptyAddTime", 0, 0, 10 ).SetStep( 0.05 ).SetTitle( "Reload Empty Add Time" ).SetToolTip( "During an empty reload, when the gun will literally get more ammo (ammo counter fills up). Uses Reload Add if set to zero." );
+		Asset.AddEntry_Float( "reloadStartAddTime", 0, 0, 10 ).SetStep( 0.05 ).SetTitle( "Reload Start Add" ).SetToolTip( "During the start reload animation, this is when the gun will literally get more ammo (ammo counter fills up). Segemented reloads only." );
+		Asset.AddEntry_Float( "reloadStartTime", 0, 0, 10 ).SetStep( 0.05 ).SetTitle( "Reload Start" ).SetToolTip( "For a segmented reload weapon, the number of seconds over which the reload start animation will be played." );
+		Asset.AddEntry_Float( "reloadEndTime", 0, 0, 10 ).SetStep( 0.05 ).SetTitle( "Reload End" ).SetToolTip( "For a segmented reload weapon, the number of seconds over which the reload end animation will be played." );
+		Asset.AddEntry_Float( "rechamberTime", 0.1, 0, 10 ).SetStep( 0.05 ).SetTitle( "Rechamber" ).SetToolTip( "How long this weapon state will last. The viewmodel animations will get scaled to match the times set." );
+		Asset.AddEntry_Float( "rechamberBoltTime", 0, 0, 10 ).SetStep( 0.05 ).SetTitle( "Rechamber Bolt" ).SetToolTip( "How long this weapon state will last. The viewmodel animations will get scaled to match the times set." );
+		Asset.AddEntry_Float( "dropTime", 0.5, 0, 10 ).SetStep( 0.05 ).SetTitle( "Drop" ).SetToolTip( "How long this weapon state will last. The viewmodel animations will get scaled to match the times set." );
+		Asset.AddEntry_Float( "raiseTime", 0.5, 0, 10 ).SetStep( 0.05 ).SetTitle( "Raise" ).SetToolTip( "How long this weapon state will last. The viewmodel animations will get scaled to match the times set." );
+		Asset.AddEntry_Float( "firstRaiseTime", 0.5, 0, 10 ).SetStep( 0.05 ).SetTitle( "First Raise" ).SetToolTip( "How long this weapon state will last. The viewmodel animations will get scaled to match the times set." );
+		Asset.AddEntry_Float( "altDropTime", 0.5, 0, 10 ).SetStep( 0.05 ).SetTitle( "Alt Drop" ).SetToolTip( "How long this weapon state will last. The viewmodel animations will get scaled to match the times set." );
+		Asset.AddEntry_Float( "altRaiseTime", 0.5, 0, 10 ).SetStep( 0.05 ).SetTitle( "Alt Raise" ).SetToolTip( "How long this weapon state will last. The viewmodel animations will get scaled to match the times set." );
+		Asset.AddEntry_Float( "adsAltDropTime", 0.5, 0, 10 ).SetStep( 0.05 ).SetTitle( "Ads Alt Drop" ).SetToolTip( "How long this weapon state will last. The viewmodel animations will get scaled to match the times set." );
+		Asset.AddEntry_Float( "adsAltRaiseTime", 0.5, 0, 10 ).SetStep( 0.05 ).SetTitle( "Ads Alt Raise" ).SetToolTip( "How long this weapon state will last. The viewmodel animations will get scaled to match the times set." );
+		Asset.AddEntry_Float( "quickDropTime", 0.5, 0, 10 ).SetStep( 0.05 ).SetTitle( "Quick Drop" ).SetToolTip( "How long this weapon state will last. The viewmodel animations will get scaled to match the times set." );
+		Asset.AddEntry_Float( "quickRaiseTime", 0.5, 0, 10 ).SetStep( 0.05 ).SetTitle( "Quick Raise" ).SetToolTip( "How long this weapon state will last. The viewmodel animations will get scaled to match the times set." );
+		Asset.AddEntry_Float( "emptyDropTime", 0.5, 0, 10 ).SetStep( 0.05 ).SetTitle( "Empty Drop" ).SetToolTip( "How long this weapon state will last. The viewmodel animations will get scaled to match the times set." );
+		Asset.AddEntry_Float( "emptyRaiseTime", 0.5, 0, 10 ).SetStep( 0.05 ).SetTitle( "Empty Raise" ).SetToolTip( "How long this weapon state will last. The viewmodel animations will get scaled to match the times set." );
+		Asset.AddEntry_Float( "sprintInTime", 0.5, 0, 10 ).SetStep( 0.05 ).SetTitle( "Sprint In" ).SetToolTip( "How long this weapon state will last. The viewmodel animations will get scaled to match the times set." );
+		Asset.AddEntry_Float( "sprintLoopTime", 0.5, 0, 10 ).SetStep( 0.05 ).SetTitle( "Sprint Loop" ).SetToolTip( "How long this weapon state will last. The viewmodel animations will get scaled to match the times set." );
+		Asset.AddEntry_Float( "sprintOutTime", 0.5, 0, 10 ).SetStep( 0.05 ).SetTitle( "Sprint Out" ).SetToolTip( "How long this weapon state will last. The viewmodel animations will get scaled to match the times set." );
+		Asset.AddEntry_Float( "sprintCombatTime", 0.2, 0, 10 ).SetStep( 0.05 ).SetTitle( "Sprint Combat Time" ).SetToolTip( "Time it takes to fire from sprint when using sprint fire perk." );
+		Asset.AddEntry_Float( "sprintCombatCooldownTime", 1, 0, 10 ).SetStep( 0.05 ).SetTitle( "Sprint Combat Cooldown" ).SetToolTip( "Time to remain in sprint combat mode after firing." );
+		Asset.AddEntry_Float( "lowReadyInTime", 0.5, 0, 10 ).SetStep( 0.05 ).SetTitle( "Low Ready In" ).SetToolTip( "How long this weapon state will last. The viewmodel animations will get scaled to match the times set." );
+		Asset.AddEntry_Float( "lowReadyLoopTime", 0.5, 0, 10 ).SetStep( 0.05 ).SetTitle( "Low Ready Loop" ).SetToolTip( "How long this weapon state will last. The viewmodel animations will get scaled to match the times set." );
+		Asset.AddEntry_Float( "lowReadyOutTime", 0.5, 0, 10 ).SetStep( 0.05 ).SetTitle( "Low Ready Out" ).SetToolTip( "How long this weapon state will last. The viewmodel animations will get scaled to match the times set." );
+		Asset.AddEntry_Float( "swimIdleLoopTime", 2, 0, 10 ).SetStep( 0.05 ).SetTitle( "Swim Idle Loop Time" ).SetToolTip( "How long this weapon state will last. The viewmodel animations will get scaled to match the times set." );
+		Asset.AddEntry_Float( "castTime", 1.0, 0, 10 ).SetStep( 0.05 ).SetTitle( "Ability Cast Time" ).SetToolTip( "How long this weapon state will last. The viewmodel animations will get scaled to match the times set." );
+		Asset.AddEntry_Float( "slideInTime", 0.5, 0, 10 ).SetStep( 0.05 ).SetTitle( "Slide In" ).SetToolTip( "How long this weapon state will last. The viewmodel animations will get scaled to match the times set." );
+		Asset.AddEntry_Float( "slideLoopTime", 0.5, 0, 10 ).SetStep( 0.05 ).SetTitle( "Slide Loop" ).SetToolTip( "How long this weapon state will last. The viewmodel animations will get scaled to match the times set." );
+		Asset.AddEntry_Float( "slideOutTime", 0.5, 0, 10 ).SetStep( 0.05 ).SetTitle( "Slide Out" ).SetToolTip( "How long this weapon state will last. The viewmodel animations will get scaled to match the times set." );
+
+	}
+	
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+ 	
+	// Sprint Movement Settings
+	
+	Asset.BeginCategory( "Sprint Movement Settings" );
+	{
+		Asset.AddEntry_Float( "sprintOfsF", 0, -300, 300 ).Show( false );
+		Asset.AddEntry_Float( "sprintOfsR", 0, -300, 300 ).Show( false );
+		Asset.AddEntry_Float( "sprintOfsU", 0, -300, 300 ).Show( false );
+		Asset.AddEntry_Float( "sprintRotP", 0, -300, 300 ).Show( false );
+		Asset.AddEntry_Float( "sprintRotY", 0, -300, 300 ).Show( false );
+		Asset.AddEntry_Float( "sprintRotR", 0, -300, 300 ).Show( false );
+		Asset.AddEntry_Float( "sprintScale", 1, 0.01, 10 ).Show( false );
+	}
+
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+ 	
+	// LowReady Movement Settings ( unused )
+	
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+ 	
+	// Dive to Prone Movement Settings
+	
+	Asset.BeginCategory( "Dive to Prone Movement Settings" );
+	{
+		Asset.AddEntry_Float( "dtpOfsF", 0, -300, 300 ).Show( false );
+		Asset.AddEntry_Float( "dtpOfsR", 0, -300, 300 ).Show( false );
+		Asset.AddEntry_Float( "dtpOfsU", 0, -300, 300 ).Show( false );
+		Asset.AddEntry_Float( "dtpRotP", 0, -300, 300 ).Show( false );
+		Asset.AddEntry_Float( "dtpRotY", 0, -300, 300 ).Show( false );
+		Asset.AddEntry_Float( "dtpRotR", 0, -300, 300 ).Show( false );
+		Asset.AddEntry_Float( "dtpScale", 1, 0.01, 10 ).Show( false );
+	}
+	
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+
+	// Mantle Movement Settings ( unused )
+	
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+
+	// Player Slide Movement Settings ( unused )
+	
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+ 	
+	// Strafe Movement Settings
+	
+	Asset.BeginCategory( "Strafe Movement Settings" );	
+	{
+		Asset.AddEntry_Float( "strafeMoveF", 0, -300, 300 ).Show( false );
+		Asset.AddEntry_Float( "strafeMoveR", 0, -300, 300 ).Show( false );
+		Asset.AddEntry_Float( "strafeMoveU", 0, -300, 300 ).Show( false );
+		Asset.AddEntry_Float( "strafeRotP", 0, -300, 300 ).Show( false );
+		Asset.AddEntry_Float( "strafeRotY", 0, -300, 300 ).Show( false );
+		Asset.AddEntry_Float( "strafeRotR", 0, -300, 300 ).Show( false );
+	}
+
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+ 	
+	// Stand Movement Settings
+	
+	Asset.BeginCategory( "Stand Movement Settings" );
+	{
+		Asset.AddEntry_Float( "standMoveF", 0, -300, 300 ).Show( false );
+		Asset.AddEntry_Float( "standMoveR", 1, -300, 300 ).Show( false );
+		Asset.AddEntry_Float( "standMoveU", -1.5, -300, 300 ).Show( false );
+		Asset.AddEntry_Float( "standRotP", 0, -300, 300 ).Show( false );
+		Asset.AddEntry_Float( "standRotY", 0, -300, 300 ).Show( false );
+		Asset.AddEntry_Float( "standRotR", 0, -300, 300 ).Show( false );
+		Asset.AddEntry_Float( "standMoveMinSpeed", 110, 0, 3000 ).Show( false );
+		Asset.AddEntry_Float( "posMoveRate", 4, 0, 300 ).Show( false );
+		Asset.AddEntry_Float( "standRotMinSpeed", 110, 0, 1000 ).Show( false );
+		Asset.AddEntry_Float( "posRotRate", 5, 0, 300 ).Show( false );
+	}
+	
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+ 	
+	// Crouch Movement Settings
+
+	Asset.BeginCategory( "Crouch Movement Settings" );	
+	{
+		Asset.AddEntry_Float( "duckedMoveF", 0, -300, 300 ).Show( false );
+		Asset.AddEntry_Float( "duckedMoveR", 1, -300, 300 ).Show( false );
+		Asset.AddEntry_Float( "duckedMoveU", -1.5, -300, 300 ).Show( false );
+		Asset.AddEntry_Float( "duckedRotP", 0, -300, 300 ).Show( false );
+		Asset.AddEntry_Float( "duckedRotY", 0, -300, 300 ).Show( false );
+		Asset.AddEntry_Float( "duckedRotR", 0, -300, 300 ).Show( false );
+		Asset.AddEntry_Float( "duckedOfsF", -2, -300, 300 ).Show( false );
+		Asset.AddEntry_Float( "duckedOfsR", 2, -300, 300 ).Show( false );
+		Asset.AddEntry_Float( "duckedOfsU", -0.2, -300, 300 ).Show( false );
+		Asset.AddEntry_Float( "duckedMoveMinSpeed", 60, 0, 3000 ).Show( false );
+		Asset.AddEntry_Float( "duckedRotMinSpeed", 60, 0, 1000 ).Show( false );
+	}
+	
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+ 	
+	// Prone Movement Settings
+
+	Asset.BeginCategory( "Prone Movement Settings" );
+	{
+		Asset.AddEntry_Float( "proneMoveF", 0, -300, 300 ).Show( false );
+		Asset.AddEntry_Float( "proneMoveR", 1, -300, 300 ).Show( false );
+		Asset.AddEntry_Float( "proneMoveU", -1.5, -300, 300 ).Show( false );
+		Asset.AddEntry_Float( "proneRotP", 0, -300, 300 ).Show( false );
+		Asset.AddEntry_Float( "proneRotY", 0, -300, 300 ).Show( false );
+		Asset.AddEntry_Float( "proneRotR", 0, -300, 300 ).Show( false );
+		Asset.AddEntry_Float( "proneOfsF", -6, -300, 300 ).Show( false );
+		Asset.AddEntry_Float( "proneOfsR", 3.5, -300, 300 ).Show( false );
+		Asset.AddEntry_Float( "proneOfsU", 0.8, -300, 300 ).Show( false );
+		Asset.AddEntry_Float( "proneMoveMinSpeed", 0, 0, 3000 ).Show( false );
+		Asset.AddEntry_Float( "posProneMoveRate", 10, 0, 300 ).Show( false );
+		Asset.AddEntry_Float( "proneRotMinSpeed", 0, 0, 1000 ).Show( false );
+		Asset.AddEntry_Float( "posProneRotRate", 10, 0, 300 ).Show( false );
+	}
+	
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+ 	
+	// Idle Settings // Check this...
+	
+	Asset.BeginCategory( "Idle Settings" );
+	{
+		Asset.AddEntry_Int( "hipIdleAmount", 80, 0, 150 ).Show( false );
+		Asset.AddEntry_Int( "adsIdleAmount", 25, 0, 150 ).Show( false );
+		Asset.AddEntry_Float( "hipIdleSpeed", 1, 0, 100 ).Show( false );
+		Asset.AddEntry_Float( "adsIdleSpeed", 1, 0, 100 ).Show( false );
+		Asset.AddEntry_Float( "idleSpeedFromFireTransitionTime", 0, 0, 10 ).Show( false );
+		Asset.AddEntry_Float( "idleCrouchFactor", 0.5, 0, 1 ).Show( false );
+		Asset.AddEntry_Float( "idleProneFactor", 0.15, 0, 1 ).Show( false );
+	}
+
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+	
+	// ADS Settings
+
+	Asset.BeginCategory( "ADS Settings" );		
+	{
+		Asset.AddEntry_Float( "adsSpread", 0, 0, 10 ).Show( false );
+		Asset.AddEntry_Float( "adsAimPitch", 0, -30, 30 ).Show( false );
+		Asset.AddEntry_Float( "adsTransInTime", 0.3, 0, 10 ).Show( false );
+		Asset.AddEntry_Float( "adsTransOutTime", 0.6, 0, 10 ).Show( false );
+		Asset.AddEntry_Float( "adsReloadTransTime", 0.6, 0, 5 ).Show( false );
+		Asset.AddEntry_Float( "adsCrosshairInFrac", 1, 0, 1 ).Show( false );
+		Asset.AddEntry_Float( "adsCrosshairOutFrac", 0.2, 0, 1 ).Show( false );
+		Asset.AddEntry_Float( "adsZoomFov1", 65, 1, 160 ).Show( false );
+		Asset.AddEntry_Float( "adsZoomFov2", 65, 1, 160 ).Show( false );
+		Asset.AddEntry_Float( "adsZoomFov3", 65, 1, 160 ).Show( false );
+		Asset.AddEntry_String( "adsZoomSound", "" ).Show( false );
+		Asset.AddEntry_Float( "adsZoomInFrac", 0.5, 0, 1 ).Show( false );
+		Asset.AddEntry_Float( "adsZoomOutFrac", 0.1, 0, 1 ).Show( false );
+		Asset.AddEntry_Float( "adsBobFactor", 1, 0, 10 ).Show( false );
+		Asset.AddEntry_Float( "adsViewBobMult", 0, 0, 100 ).Show( false );
+		Asset.AddEntry_Float( "adsViewErrorMin", 0, 0, 90 ).Show( false );
+		Asset.AddEntry_Float( "adsViewErrorMax", 0, 0, 90 ).Show( false );		
+	}
+	
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+ 	
+	// Hip Spread Settings
+	
+	Asset.BeginCategory( "Hip Spread Settings" );
+	{
+		Asset.AddEntry_Float( "hipSpreadStandMin", 4, 0, 90 ).SetStep( 0.1 ).SetTitle( "Stand Min" ).SetToolTip( "Smallest diameter the crosshairs can contract to." );
+		Asset.AddEntry_Float( "hipSpreadMax", 10, 0, 90 ).SetStep( 0.1 ).SetTitle( "Stand Max" ).SetToolTip( "Largest diameter the crosshairs can expand to while standing." );
+		Asset.AddEntry_Float( "hipSpreadDecayRate", 1.5, 0, 50 ).SetStep( 0.05 ).SetTitle( "Decay Rate" ).SetToolTip( "Rate at which the crosshairs try to return to the Min hip spread size." );
+		Asset.AddEntry_Float( "hipSpreadDuckedMin", 3, 0, 90 ).SetStep( 0.1 ).SetTitle( "Crouch Min" ).SetToolTip( "Size of the crosshairs at rest when crouched." );
+		Asset.AddEntry_Float( "hipSpreadDuckedMax", 10, 0, 90 ).SetStep( 0.1 ).SetTitle( "Crouch Max" ).SetToolTip( "Largest diameter the crosshairs can expand to while crouched." );
+		Asset.AddEntry_Float( "hipSpreadDuckedDecay", 1.375, 0, 10 ).SetStep( 0.1 ).SetTitle( "Crouch Decay" ).SetToolTip( "Multiplier of Decay Rate for crouched stance, controlling how fast the crosshairs return to Crouch Min." );
+		Asset.AddEntry_Float( "hipSpreadProneMin", 2, 0, 90 ).SetStep( 0.1 ).SetTitle( "Prone Min" ).SetToolTip( "Size of the crosshairs at rest when prone." );
+		Asset.AddEntry_Float( "hipSpreadProneMax", 10, 0, 90 ).SetStep( 0.1 ).SetTitle( "Prone Max" ).SetToolTip( "Largest diameter the crosshairs can expand to while prone." );
+		Asset.AddEntry_Float( "hipSpreadProneDecay", 1.6, 0, 10 ).SetStep( 0.1 ).SetTitle( "Prone Decay" ).SetToolTip( "Multiplier of Decay Rate for prone stance, controlling how fast the crosshairs return to Prone Min." );
+		Asset.AddEntry_Float( "hipSpreadSlideMin", 3, 0, 90 ).SetStep( 0.1 ).SetTitle( "Slide Min" ).SetToolTip( "Size of the crosshairs at rest when sliding." );
+		Asset.AddEntry_Float( "hipSpreadSlideMax", 10, 0, 90 ).SetStep( 0.1 ).SetTitle( "Slide Max" ).SetToolTip( "Largest diameter the crosshairs can expand to while sliding." );
+		Asset.AddEntry_Float( "hipSpreadSlideDecay", 1.375, 0, 10 ).SetStep( 0.1 ).SetTitle( "Slide Decay" ).SetToolTip( "Multiplier of Decay Rate for sliding stance, controlling how fast the crosshairs return to Slide Min." );
+		Asset.AddEntry_Float( "hipSpreadFireAdd", 0.25, 0, 1 ).SetStep( 0.1 ).SetTitle( "Fire Add" ).SetToolTip( "Amount by which the crosshairs expand per bullet fired." );
+		Asset.AddEntry_Float( "hipSpreadMoveAdd", 0, 0, 10 ).SetStep( 0.1 ).SetTitle( "Move Add" ).SetToolTip( "Rate of crosshair expansion due to player movement." );
+		Asset.AddEntry_Float( "hipSpreadSprintAdd", 0, 0, 10 ).SetStep( 0.1 ).SetTitle( "Sprint Add" ).SetToolTip( "Rate of crosshair expansion due to player movement." );
+		Asset.AddEntry_Float( "hipSpreadTurnAdd", 0, 0, 10 ).SetStep( 0.1 ).SetTitle( "Turn Add" ).SetToolTip( "Rate of crosshair expansion due to player panning the view in any direction." );
+	}
+	
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+ 	
+	// Gun Kick Settings
+	
+	Asset.BeginCategory( "Gun Kick Settings" );
+	{
+		Asset.AddEntry_Int( "hipGunKickReducedKickBullets", 4, 0, 100 ).SetTitle( "Hip Red. Kick Bullets" ).SetToolTip( "Hipfire viewmodel control reduced kick number of bullets. This is the number of bullets before the weapon uses a full kick amount." );
+		Asset.AddEntry_Int( "adsGunKickReducedKickBullets", 4, 0, 100 ).SetTitle( "ADS Red. Kick Bullets" ).SetToolTip( "ADS viewmodel control reduced kick number of bullets. This is the number of bullets before the weapon uses a full kick amount." );
+		Asset.AddEntry_Float( "hipGunKickReducedKickPercent", 20, 0, 100 ).SetTitle( "Hip Red. Kick Percent" ).SetToolTip( "Hip viewmodel control reduced kick percentage. This is the percentage of the full kick amount to kick the gun for the first few bullets." );
+		Asset.AddEntry_Float( "adsGunKickReducedKickPercent", 20, 0, 100 ).SetTitle( "ADS Red. Kick Percent" ).SetToolTip( "ADS viewmodel control reduced kick percentage. This is the percentage of the full kick amount to kick the gun for the first few bullets." );
+		Asset.AddEntry_Float( "hipGunKickPitchMin", -5, -100, 100 ).SetTitle( "Hip Pitch Min" ).SetToolTip( "Hipfire viewmodel control. +/- sign means 'kick down/up'. Larger absolute numbers increase viewmodel climb/descent. From -100 to 100. Actual viewmodel angle will not exceed Max Gun Pitch." );
+		Asset.AddEntry_Float( "adsGunKickPitchMin", -30, -100, 100 ).SetTitle( "ADS Pitch Min" ).SetToolTip( "ADS viewmodel control. +/- sign means 'kick down/up'. Larger absolute numbers increase viewmodel climb/descent. From -100 to 100." );
+		Asset.AddEntry_Float( "hipGunKickPitchMax", -3, -100, 100 ).SetTitle( "Hip Pitch Max" ).SetToolTip( "Hipfire viewmodel control. +/- sign means 'kick down/up'. Larger absolute numbers increase viewmodel climb/descent. From -100 to 100. Actual viewmodel angle will not exceed Max Gun Pitch." );
+		Asset.AddEntry_Float( "adsGunKickPitchMax", -20, -100, 100 ).SetTitle( "ADS Pitch Max" ).SetToolTip( "ADS viewmodel control. +/- sign means 'kick down/up'. Larger absolute numbers increase viewmodel climb/descent. From -100 to 100." );
+		Asset.AddEntry_Float( "hipGunKickYawMin", -15, -100, 100 ).SetTitle( "Hip Yaw Min" ).SetToolTip( "Hipfire viewmodel control. +/- sign means 'kick left/right'. Larger absolute numbers increase viewmodel yawing. From -100 to 100. Actual viewmodel angle will not exceed Max Gun Yaw." );
+		Asset.AddEntry_Float( "adsGunKickYawMin", -17, -100, 100 ).SetTitle( "ADS Yaw Min" ).SetToolTip( "ADS viewmodel control. +/- sign means 'kick left/right'. Larger absolute numbers increase viewmodel yawing. From -100 to 100." );
+		Asset.AddEntry_Float( "hipGunKickYawMax", 15, -100, 100 ).SetTitle( "Hip Yaw Max" ).SetToolTip( "Hipfire viewmodel control. +/- sign means 'kick left/right'. Larger absolute numbers increase viewmodel yawing. From -100 to 100. Actual viewmodel angle will not exceed Max Gun Yaw." );
+		Asset.AddEntry_Float( "adsGunKickYawMax", 17, -100, 100 ).SetTitle( "ADS Yaw Max" ).SetToolTip( "ADS viewmodel control. +/- sign means 'kick left/right'. Larger absolute numbers increase viewmodel yawing. From -100 to 100." );
+		Asset.AddEntry_Float( "hipGunKickAccel", 250, 0, 1000 ).SetTitle( "Hip Accel" ).SetToolTip( "Rate at which viewmodel attempts to recenter in hipfire. Directly opposes yaws and pitch accumulation." );
+		Asset.AddEntry_Float( "adsGunKickAccel", 250, 0, 1000 ).SetTitle( "ADS Accel" ).SetToolTip( "Rate at which viewmodel attempts to recenter in ADS. Directly opposes yaws and pitch accumulation." );
+		Asset.AddEntry_Float( "hipGunKickSpeedMax", 500, 0, 10000 ).SetTitle( "Hip Speed Max" ).SetToolTip( "Maximum deflection speed reached by the viewmodel in hipfire." );
+		Asset.AddEntry_Float( "adsGunKickSpeedMax", 1000, 0, 10000 ).SetTitle( "ADS Speed Max" ).SetToolTip( "Maximum deflection speed reached by the viewmodel in ADS." );
+		Asset.AddEntry_Float( "hipGunKickSpeedDecay", 15, 0, 100 ).SetTitle( "Hip Speed Decay" ).SetToolTip( "Strength of decay on viewmodel deflection speed in hipfire." ).SetStep( 0.1 );
+		Asset.AddEntry_Float( "adsGunKickSpeedDecay", 10, 0, 100 ).SetTitle( "ADS Speed Decay" ).SetToolTip( "Strength of decay on viewmodel deflection speed in ADS." ).SetStep( 0.1 );
+		Asset.AddEntry_Float( "hipGunKickStaticDecay", 1, 0, 100 ).SetTitle( "Hip Static Decay" ).SetToolTip( "Strength of decay on viewmodel recentering once it has stopped deflecting." ).SetStep( 0.1 );
+		Asset.AddEntry_Float( "adsGunKickStaticDecay", 1, 0, 100 ).SetTitle( "ADS Static Decay" ).SetToolTip( "Strength of decay on viewmodel recentering once it has stopped deflecting." ).SetStep( 0.1 );
+	}
+	
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+ 	
+	// View Kick Settings
+	
+	Asset.BeginCategory( "View Kick Settings" );
+	{
+		Asset.AddEntry_Float( "hipViewKickPitchMin", 20, -100, 100 ).SetTitle( "Hip Pitch Min" ).SetToolTip( "Hipfire view kick control. -/+ sign means 'kick down/up'. Larger absolute numbers increase view kick climb/descent. From -100 to 100." );
+		Asset.AddEntry_Float( "adsViewKickPitchMin", 20, -200, 200 ).SetTitle( "ADS Pitch Min" ).SetToolTip( "ADS view kick control. -/+ sign means 'kick down/up'. Larger absolute numbers increase view kick climb/descent. From -100 to 100." );
+		Asset.AddEntry_Float( "hipViewKickPitchMax", 40, -100, 100 ).SetTitle( "Hip Pitch Max" ).SetToolTip( "Hipfire view kick control. -/+ sign means 'kick down/up'. Larger absolute numbers increase view kick climb/descent. From -100 to 100." );
+		Asset.AddEntry_Float( "adsViewKickPitchMax", 95, -200, 200 ).SetTitle( "ADS Pitch Max" ).SetToolTip( "ADS view kick control. -/+ sign means 'kick down/up'. Larger absolute numbers increase view kick climb/descent. From -100 to 100." );
+		Asset.AddEntry_Float( "hipViewKickYawMin", -15, -100, 100 ).SetTitle( "Hip Yaw Min" ).SetToolTip( "Hipfire view kick control. -/+ sign means 'kick right/left'. Larger absolute numbers increase view kick yaw. From -100 to 100." );
+		Asset.AddEntry_Float( "adsViewKickYawMin", -10, -200, 200 ).SetTitle( "ADS Yaw Min" ).SetToolTip( "ADS view kick control. -/+ sign means 'kick right/left'. Larger absolute numbers increase view kick yaw. From -100 to 100." );
+		Asset.AddEntry_Float( "hipViewKickYawMax", 15, -100, 100 ).SetTitle( "Hip Yaw Max" ).SetToolTip( "Hipfire view kick control. -/+ sign means 'kick right/left'. Larger absolute numbers increase view kick yaw. From -100 to 100." );
+		Asset.AddEntry_Float( "adsViewKickYawMax", 30, -200, 200 ).SetTitle( "ADS Yaw Max" ).SetToolTip( "ADS view kick control. -/+ sign means 'kick right/left'. Larger absolute numbers increase view kick yaw. From -100 to 100." );
+		Asset.AddEntry_Float( "hipViewKickCenterSpeed", 2000, 0, 10000 ).SetStep( 10 ).SetTitle( "Hip Center Speed" ).SetToolTip( "Speed with which the view continuously attempts to recenter in hipfire." );
+		Asset.AddEntry_Float( "adsViewKickCenterSpeed", 2000, 0, 10000 ).SetStep( 10 ).SetTitle( "ADS Center Speed" ).SetToolTip( "Speed with which the view continuously attempts to recenter in ADS." );
+		Asset.AddEntry_Float( "adsViewKickCenterDuckedScale", 1, 0, 100 ).SetStep( 0.05 ).SetTitle( "ADS Center Speed Crouch Scale" ).SetHints( "NOWARNINGS" ).SetToolTip( "ADS Center Speed is scaled by this amount when in crouch stance." );
+		Asset.AddEntry_Float( "adsViewKickCenterProneScale", 1, 0, 100 ).SetStep( 0.05 ).SetTitle( "ADS Center Speed Prone Scale" ).SetHints( "NOWARNINGS" ).SetToolTip( "ADS Center Speed is scaled by this amount when in prone stance." );
+	}
+	
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+ 	
+	// Sway Settings
+	
+	Asset.BeginCategory( "Sway Settings" );
+	{
+		Asset.AddEntry_Float( "swayMaxAngle", 30, 0, 180 ).SetTitle( "Max Angle" ).SetToolTip( "Max angle change that will be applied to the hipfire viewmodel sway." ).SetStep( 0.05 );
+		Asset.AddEntry_Float( "adsSwayMaxAngle", 30, 0, 180 ).SetTitle( "ADS Max Angle" ).SetToolTip( "Max angle change that will be applied to the ADS viewmodel sway." ).SetStep( 0.05 );
+		Asset.AddEntry_Float( "swayLerpSpeed", 6, 1, 50 ).SetTitle( "Lerp Speed" ).SetToolTip( "Speed at which the sway will lerp in hipfire." ).SetStep( 0.05 );
+		Asset.AddEntry_Float( "adsSwayLerpSpeed", 6, 1, 50 ).SetTitle( "ADS Lerp Speed" ).SetToolTip( "Speed at which the sway will lerp in ADS." ).SetStep( 0.05 );
+		Asset.AddEntry_Float( "adsSwayTransitionLerpSpeed", 0, 0, 50 ).SetTitle( "ADS Transition Lerp Speed" ).SetToolTip( "Speed at which the sway will lerp during ADS transition. Zero means unused." ).SetStep( 0.05 );
+		Asset.AddEntry_Float( "swayPitchScale", 0.1, -2, 2 ).SetTitle( "Pitch Scale" ).SetToolTip( "Amount of pitch change in the viewmodel to apply to the sway pitch in hipfire." ).SetStep( 0.05 );
+		Asset.AddEntry_Float( "adsSwayPitchScale", 0.1, -2, 2 ).SetTitle( "ADS Pitch Scale" ).SetToolTip( "Amount of yaw change in the viewmodel to apply to the sway yaw in hipfire." ).SetStep( 0.05 );
+		Asset.AddEntry_Float( "swayYawScale",  0.1, -2, 2 ).SetTitle( "Yaw Scale" ).SetToolTip( "ADS Yaw Scale" ).SetStep( 0.05 );
+		Asset.AddEntry_Float( "adsSwayYawScale",  0.1, -2, 2 ).SetTitle( "ADS Yaw Scale" ).SetToolTip( "Amount of yaw change in the viewmodel to apply to the sway yaw in ADS." ).SetStep( 0.05 );
+		Asset.AddEntry_Float( "swayHorizScale", 0.1, -2, 2 ).SetTitle( "Horiz Scale" ).SetToolTip( "Amount of yaw change in the viewmodel to apply to the sway horizontal offset in hipfire." ).SetStep( 0.05 );
+		Asset.AddEntry_Float( "adsSwayHorizScale", 0.1, -2, 2 ).SetTitle( "ADS Horiz Scale" ).SetToolTip( "Amount of yaw change in the viewmodel to apply to the sway horizontal offset in ADS." ).SetStep( 0.05 );
+		Asset.AddEntry_Float( "swayVertScale", 0.1, -2, 2 ).SetTitle( "Vert Scale" ).SetToolTip( "Amount of pitch change in the view model to apply to the sway vertical offset in hipfire." ).SetStep( 0.05 );
+		Asset.AddEntry_Float( "adsSwayVertScale", 0.1, -2, 2 ).SetTitle( "ADS Vert Scale" ).SetToolTip( "Amount of pitch change in the view model to apply to the sway vertical offset in ADS." ).SetStep( 0.05 );
+		Asset.AddEntry_Float( "swayShellShockScale", 5, 0, 20 ).SetTitle( "Shell Shock Scale" ).SetToolTip( "This scale gets applied to the weapon sway while you're in shell shock." ).SetStep( 0.05 );
+	}
+	
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+ 	
+	// Mountable Weaponry
+
+	Asset.BeginCategory( "Mountable Weaponry" );
+	{
+		Asset.AddEntry_CheckBox( "mountableWeapon", false ).SetTitle( "Weapon can be mounted" ).SetToolTip( "This weapon can be mounted on mount brushes" );
+		Asset.AddEntry_Float( "deployTime", 0.5, 0, 10 ).SetTitle( "Deploy Time" ).SetToolTip( "The time it takes to deploy this weapon" );
+		Asset.AddEntry_Float( "breakdownTime", 0.5, 0, 10 ).SetTitle( "Breakdown Time" ).SetToolTip( "The time it takes to breakdown this weapon if it is deployed" );
+		Asset.AddEntry_String( "standMountedWeapdef", "" ).SetTitle( "Standing Weapondef" ).SetToolTip( "This is the weapondef in turretsettings.gdt that will be used if the weapon is mounted while standing" );
+		Asset.AddEntry_String( "mountedModel", "" ).SetTitle( "Mounted Model" ).SetToolTip( "This is the model that will be used if the weapon is mounted" );
+		Asset.AddEntry_String( "crouchMountedWeapdef", "" ).SetTitle( "Crouching Weapondef" ).SetToolTip( "This is the weapondef in turretsettings.gdt that will be used if the weapon is mounted while crouching" );
+		Asset.AddEntry_String( "proneMountedWeapdef", "" ).SetTitle( "Prone Weapondef" ).SetToolTip( "This is the weapondef in turretsettings.gdt that will be used if the weapon is mounted while prone" );
+	}
+	
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+ 	
+	// AI Settings
+
+	//AddEntries_UISettings();
+	
+	Asset.BeginCategory( "AI Settings" );
+	{
+		Asset.AddEntry_Float( "fightDist", 720, 1, 100000 ).Show( false );
+		Asset.AddEntry_Float( "maxDist", 1400, 1, 100000 ).Show( false );
+		Asset.AddEntry_Path( "aiVsAiAccuracyGraph", "" ).Show( false );
+		Asset.AddEntry_Path( "aiVsPlayerAccuracyGraph", "" ).Show( false );
+	}
+	
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+ 	
+	// Reticle Settings
+
+	Asset.BeginCategory( "Reticle Settings" );	
+	{
+		Asset.AddEntry_Path( "reticleCenter", "" ).Show( false );
+		Asset.AddEntry_Int( "reticleCenterSize", 32, 1, 480 ).Show( false );	
+		Asset.AddEntry_Path( "reticleSide", "" ).Show( false );
+		Asset.AddEntry_Int( "reticleSideSize", 16, 1, 480 ).Show( false );
+		Asset.AddEntry_Float( "hipReticleSidePos", 0, 0, 1 ).Show( false );
+		Asset.AddEntry_Int( "reticleMinOfs", 0, 0, 480 ).Show( false );
+	}
+	
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+ 	
+	// ADS Overlay Settings
+	
+	Asset.BeginCategory( "ADS Overlay Settings" );
+	{
+		Asset.AddEntry_String( "adsOverlayShader", "" ).Show( false );
+		Asset.AddEntry_String( "adsOverlayShaderLowRes", "" ).Show( false );
+		Asset.AddEntry_Combo( "adsOverlayReticle", "none | crosshair | FG42 | Springfield | binoculars" ).Show( false ).SetTitle( "Reticle" ).SetToolTip( "Built-in reticle drawn with the ADS overlay: none, a plain crosshair or one of the preset sights." );
+		Asset.AddEntry_Int( "adsOverlayWidth", 320, 1, 640 ).Show( false ).SetTitle( "Width" );
+		Asset.AddEntry_Int( "adsOverlayHeight", 240, 1, 480 ).Show( false ).SetTitle( "Height" );
+	}
+	
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+ 	
+	// XModels
+	
+	Asset.BeginCategory( "XModels" );
+	{
+		Asset.AddEntry_AssetCombo( "gunModel", "xmodel" ).SetTitle( "View Gun" ).SetToolTip( "First-person (viewmodel) gun model the player sees in their hands." );
+		Asset.AddEntry_String( "viewmodelTag", "" ).SetTitle( "View Gun Tag" ).SetToolTip( "Name of the tag you want the viewmodel to be attached at. If blank, the default will be used (tag_weapon1 for left hand DW weapons, tag_knife_attach for melee weapons, tag_weapon otherwise)." );
+		Asset.AddEntry_AssetCombo( "worldModel", "xmodel" ).SetTitle( "World Gun" ).SetToolTip( "Third-person gun model other players see, and the model used when the weapon lies on the ground." );
+		Asset.AddEntry_AssetCombo( "stowedModel", "xmodel" ).SetTitle( "StowedWorldModel" ).SetToolTip( "This model will be used for weapons stowed on the back. If this field is empty, World Gun 1 will be used" );
+		Asset.AddEntry_String( "worldModelTagRight", "" ).SetTitle( "World Model Tag (First Gun)" ).SetToolTip( "This is the tag the gun will get attached. In a situation where there are two guns this is the first gun" );
+		Asset.AddEntry_String( "worldModelTagLeft", "" ).SetTitle( "World Model Tag (Second Gun)" ).SetToolTip( "This is the tag the second or dual wield gun will get attached." );
+		Asset.AddEntry_CheckBox( "useDroppedModelAsStowed", false ).SetTitle( "StowedModelAsDropped" ).SetToolTip( "If checked then the Dropped model will be the same as the Alt stowed World Model" );
+		Asset.AddEntry_String( "stowedModelTag", "" ).SetTitle( "Stowed Tag" ).SetToolTip( "Name of the tag you want the stowed gun to be attached at. If blank, the default will be used (tag_stowed_back)." );
+		Asset.AddEntry_Vector3( "stowedModelOffsetsF", "stowedModelOffsetsR", "stowedModelOffsetsU", 0, 0, 0, -10000, 10000 ).SetTitle( "Stowed Offset" ).SetStep( 0.01f ).SetHints( "NOWARNINGS" ).SetToolTip( "Position offset (forward, right, up, in inches) of the model when the weapon is stowed on the player's back." );
+		Asset.AddEntry_Vector3( "stowedModelOffsetsPitch", "stowedModelOffsetsYaw", "stowedModelOffsetsRoll", 0, 0, 0, -10000, 10000 ).SetTitle( "Stowed Rotation" ).SetStep( 0.01f ).SetHints( "NOWARNINGS" ).SetToolTip( "Rotation offset (pitch, yaw, roll, in degrees) of the model when the weapon is stowed on the player's back." );
+		Asset.AddEntry_AssetCombo( "handModel", "xmodel" ).SetTitle( "Default view Hand" ).SetToolTip( "Default first-person hands model used with this weapon when the character does not supply its own." );
+		Asset.AddEntry_AssetCombo( "worldClipModel", "xmodel" ).SetTitle( "World Clip Model" ).SetToolTip( "Magazine model spawned in the world when the weapon drops its clip during a reload (see World Clip Drop FX)." );
+		Asset.AddEntry_Text( "hideTags", "" ).SetTitle( "Hide Tags" ).SetToolTip( "name of tags to hide on this model.  one per line" );
+	}
+	
+	
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+ 	
+	// Camo
+	
+	Asset.BeginCategory( "Camo" );
+	{
+		Asset.AddEntry_AssetCombo( "camo", "weaponcamotable" ).SetTitle( "Weapon Camo" ).SetToolTip( "Weapon camo table that lists the camos this weapon can wear." );
+	}
+ 	
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+ 	
+	// XAnims
+	
+	Asset.BeginCategory( "XAnims" );
+	{
+		Asset.AddEntry_AssetCombo( "idleAnimLeft", "xanim" ).SetTitle( "Left Idle" ).SetToolTip( "First-person animation played for the left gun while the weapon is idle." );	
+		Asset.AddEntry_AssetCombo( "emptyIdleAnimLeft", "xanim" ).SetTitle( "Left Empty Idle" ).SetToolTip( "First-person animation played for the left gun while it is idle with an empty clip. Empty uses Left Idle." );
+		Asset.AddEntry_AssetCombo( "fireAnimLeft", "xanim" ).SetTitle( "Left Fire" ).SetToolTip( "First-person animation played for the left gun for each shot it fires." );
+		Asset.AddEntry_AssetCombo( "fireDelayAnimLeft", "xanim" ).SetTitle( "Left Fire Delay" ).SetHints( "NOWARNINGS" ).SetToolTip( "First-person animation played for the left gun during its fire delay." );
+		Asset.AddEntry_AssetCombo( "lastShotAnimLeft", "xanim" ).SetTitle( "Left Last Shot" ).SetToolTip( "First-person animation played for the left gun for the shot that empties its clip. Empty uses Left Fire." );
+		Asset.AddEntry_AssetCombo( "holdFireAnimLeft", "xanim" ).SetTitle( "Left Hold Fire" ).SetToolTip( "First-person animation played for the left gun when its fire button is held (pullback)." );
+		Asset.AddEntry_AssetCombo( "holdFireLoopAnimLeft", "xanim" ).SetTitle( "Left Hold Fire Loop" ).SetToolTip( "First-person animation played for the left gun looping while its fire button stays held." );
+		Asset.AddEntry_AssetCombo( "holdFireCancelAnimLeft", "xanim" ).SetTitle( "Left Hold Fire Cancel" ).SetToolTip( "First-person animation played for the left gun when a held fire is cancelled without firing." );
+		Asset.AddEntry_AssetCombo( "rechamberAnim", "xanim" ).SetTitle( "Rechamber" ).SetToolTip( "First-person animation played when the weapon rechambers between shots (bolt-action rifles, pump shotguns)." );
+		Asset.AddEntry_AssetCombo( "reloadAnimLeft", "xanim" ).SetTitle( "Reload Left" ).SetToolTip( "First-person animation played for the left gun's reload with rounds still in its clip." );
+		Asset.AddEntry_AssetCombo( "reloadEmptyAnimLeft", "xanim" ).SetTitle( "Reload Empty Left" ).SetToolTip( "First-person animation played for the left gun's reload with an empty clip." );
+		Asset.AddEntry_AssetCombo( "reloadStartAnim", "xanim" ).SetTitle( "Reload Start" ).SetToolTip( "First-person animation played at the start of a segmented reload, before the per-round loop." );
+		Asset.AddEntry_AssetCombo( "reloadEndAnim", "xanim" ).SetTitle( "Reload End" ).SetToolTip( "First-person animation played at the end of a segmented reload, after the last round." );
+		Asset.AddEntry_AssetCombo( "raiseAnim", "xanim" ).SetTitle( "Raise" ).SetToolTip( "First-person animation played when the weapon is pulled out." );
+		Asset.AddEntry_AssetCombo( "dropAnim", "xanim" ).SetTitle( "Drop" ).SetToolTip( "First-person animation played when the weapon is put away." );
+		Asset.AddEntry_AssetCombo( "firstRaiseAnim", "xanim" ).SetTitle( "First Raise" ).SetToolTip( "First-person animation played the first time the player pulls the weapon out." );
+		Asset.AddEntry_AssetCombo( "altRaiseAnim", "xanim" ).SetTitle( "Alt Raise" ).SetToolTip( "First-person animation played when switching to this weapon from its alternate (or back from the alt mode)." );
+		Asset.AddEntry_AssetCombo( "altDropAnim", "xanim" ).SetTitle( "Alt Drop" ).SetToolTip( "First-person animation played when switching away from this weapon to its alternate mode." );
+		Asset.AddEntry_AssetCombo( "adsAltRaiseAnim", "xanim" ).SetTitle( "Ads Alt Raise" ).SetToolTip( "First-person animation played when switching to the alternate mode while aiming down sights." );
+		Asset.AddEntry_AssetCombo( "adsAltDropAnim", "xanim" ).SetTitle( "Ads Alt Drop" ).SetToolTip( "First-person animation played when switching away from the alternate mode while aiming down sights." );
+		Asset.AddEntry_AssetCombo( "quickRaiseAnim", "xanim" ).SetTitle( "Quick Raise" ).SetToolTip( "First-person animation played for a quick raise (fast switch). Empty uses Raise." );
+		Asset.AddEntry_AssetCombo( "quickDropAnim", "xanim" ).SetTitle( "Quick Drop" ).SetToolTip( "First-person animation played for a quick drop (fast switch). Empty uses Drop." );
+		Asset.AddEntry_AssetCombo( "emptyRaiseAnim", "xanim" ).SetTitle( "Empty Raise" ).SetToolTip( "First-person animation played when the weapon is pulled out with an empty clip." );
+		Asset.AddEntry_AssetCombo( "emptyDropAnim", "xanim" ).SetTitle( "Empty Drop" ).SetToolTip( "First-person animation played when the weapon is put away with an empty clip." );
+		Asset.AddEntry_AssetCombo( "sprintInAnim", "xanim" ).SetTitle( "Sprint In" ).SetToolTip( "First-person animation played when the player starts sprinting." );
+		Asset.AddEntry_AssetCombo( "sprintLoopAnim", "xanim" ).SetTitle( "Sprint Loop" ).SetToolTip( "First-person animation played looping while the player sprints." );
+		Asset.AddEntry_AssetCombo( "sprintOutAnim", "xanim" ).SetTitle( "Sprint Out" ).SetToolTip( "First-person animation played when the player stops sprinting." );
+		Asset.AddEntry_AssetCombo( "sprintInEmptyAnim", "xanim" ).SetTitle( "SprintInEmpty" ).SetToolTip( "First-person animation played when the player starts sprinting with an empty clip. Empty uses Sprint In." );
+		Asset.AddEntry_AssetCombo( "sprintLoopEmptyAnim", "xanim" ).SetTitle( "SprintLoopEmpty" ).SetToolTip( "First-person animation played looping while the player sprints with an empty clip. Empty uses Sprint Loop." );
+		Asset.AddEntry_AssetCombo( "sprintOutEmptyAnim", "xanim" ).SetTitle( "SprintOutEmpty" ).SetToolTip( "First-person animation played when the player stops sprinting with an empty clip. Empty uses Sprint Out." );
+		Asset.AddEntry_AssetCombo( "lowReadyInAnim", "xanim" ).SetTitle( "Low Ready In" ).SetToolTip( "First-person animation played when the weapon goes into the low ready pose." );
+		Asset.AddEntry_AssetCombo( "lowReadyLoopAnim", "xanim" ).SetTitle( "Low Ready Loop" ).SetToolTip( "First-person animation played looping while the weapon is held at low ready." );
+		Asset.AddEntry_AssetCombo( "lowReadyOutAnim", "xanim" ).SetTitle( "Low Ready Out" ).SetToolTip( "First-person animation played when the weapon comes out of the low ready pose." );		
+		Asset.AddEntry_AssetCombo( "adsFireAnim", "xanim" ).SetTitle( "ADS Fire" ).SetToolTip( "First-person animation played for each shot fired while aiming down sights." );
+		Asset.AddEntry_AssetCombo( "adsLastShotAnim", "xanim" ).SetTitle( "ADS Last Shot" ).SetToolTip( "First-person animation played for the shot that empties the clip while aiming down sights." );
+		Asset.AddEntry_AssetCombo( "adsRechamberAnim", "xanim" ).SetTitle( "ADS Rechamber" ).SetToolTip( "First-person animation played when the weapon rechambers while aiming down sights." );
+		Asset.AddEntry_AssetCombo( "adsUpAnim", "xanim" ).SetTitle( "ADS Up" ).SetToolTip( "First-person animation played as the weapon is brought up to aim down sights (the pose at full ADS)." );
+		Asset.AddEntry_AssetCombo( "adsDownAnim", "xanim" ).SetTitle( "ADS Down" ).SetToolTip( "First-person animation played as the weapon is lowered out of aim down sights." );
+		Asset.AddEntry_AssetCombo( "swimIdleLoopLeft", "xanim" ).SetTitle( "Left Swim Idle Loop" ).SetToolTip( "First-person animation played for the left gun looping while the player treads water." );
+        Asset.AddEntry_AssetCombo( "swimCombatFireLeft", "xanim" ).SetTitle( "Left Swim Combat Fire" ).SetToolTip( "First-person animation played for the left gun for each shot fired while swimming." );
+		Asset.AddEntry_AssetCombo( "castAbility", "xanim" ).SetTitle( "Cast Ability" ).SetHints( "NOWARNINGS" ).SetToolTip( "First-person animation played when the player casts a specialist ability." );
+	}
+	
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+ 	
+	Asset.BeginCategory( "FX" );
+	{
+		Asset.AddEntry_Path( "viewFlashEffect", "" ).SetTitle( "View Flash FX" ).SetRelativePath( "share/raw" ).SetToolTip( "Muzzle flash effect played on the first-person gun for each shot." );
+		Asset.AddEntry_Vector3( "viewFlashOffsetF", "viewFlashOffsetR", "viewFlashOffsetU", 0, 0, 0, -10000, 10000 ).SetTitle( "FX View Flash Offset" ).SetStep( 0.01 ).SetToolTip( "Offset (forward, right, up, in inches) of the first-person muzzle flash from the tag_flash bone." );
+		Asset.AddEntry_Path( "worldFlashEffect", "" ).SetTitle( "World Flash FX" ).SetRelativePath( "share/raw" ).SetToolTip( "Muzzle flash effect played on the third-person gun for each shot (what other players see)." );
+		Asset.AddEntry_Vector3( "worldFlashOffsetF", "worldFlashOffsetR", "worldFlashOffsetU", 0, 0, 0, -10000, 10000 ).SetTitle( "FX World Flash Offset" ).SetStep( 0.01 ).SetToolTip( "Offset (forward, right, up, in inches) of the third-person muzzle flash from the tag_flash bone." );
+		Asset.AddEntry_Path( "viewShellEjectEffect", "" ).SetTitle( "View Shell Eject FX" ).SetRelativePath( "share/raw" ).SetToolTip( "Shell casing effect ejected from the first-person gun for each shot." );
+		Asset.AddEntry_Vector3( "viewShellEjectOffsetF", "viewShellEjectOffsetR", "viewShellEjectOffsetU", 0, 0, 0, -10000, 10000 ).SetTitle( "FX View Shell Offset" ).SetStep( 0.01 ).SetToolTip( "Offset (forward, right, up, in inches) of the first-person shell eject from the tag_brass bone." );
+		Asset.AddEntry_Float( "viewShellEjectRotationP", 0, -90, 90 ).SetTitle( "FX View Shell Offset Pitch" ).SetStep( 0.01 ).SetToolTip( "Pitch (degrees) added to the first-person shell eject direction." );
+		Asset.AddEntry_Float( "viewShellEjectRotationY", 0, -180, 180 ).SetTitle( "FX View Shell Offset Yaw" ).SetStep( 0.01 ).SetToolTip( "Yaw (degrees) added to the first-person shell eject direction." );
+		Asset.AddEntry_Float( "viewShellEjectRotationR", 0, -180, 180 ).SetTitle( "FX View Shell Offset Roll" ).SetStep( 0.01 ).SetToolTip( "Roll (degrees) added to the first-person shell eject direction." );		
+		Asset.AddEntry_Path( "worldShellEjectEffect", "" ).SetTitle( "World Shell Eject FX" ).SetRelativePath( "share/raw" ).SetToolTip( "Shell casing effect ejected from the third-person gun for each shot." );
+		Asset.AddEntry_Vector3( "worldShellEjectOffsetF", "worldShellEjectOffsetR", "worldShellEjectOffsetU", 0, 0, 0, -10000, 10000 ).SetTitle( "FX World Shell Offset" ).SetStep( 0.01 ).SetToolTip( "Offset (forward, right, up, in inches) of the third-person shell eject from the tag_brass bone." );
+		Asset.AddEntry_Float( "worldShellEjectRotationP", 0, -90, 90 ).SetTitle( "FX World Shell Offset Pitch" ).SetStep( 0.01 ).SetToolTip( "Pitch (degrees) added to the third-person shell eject direction." );
+		Asset.AddEntry_Float( "worldShellEjectRotationY", 0, -180, 180 ).SetTitle( "FX World Shell Offset Yaw" ).SetStep( 0.01 ).SetToolTip( "Yaw (degrees) added to the third-person shell eject direction." );
+		Asset.AddEntry_Float( "worldShellEjectRotationR", 0, -180, 180 ).SetTitle( "FX World Shell Offset Roll" ).SetStep( 0.01 ).SetToolTip( "Roll (degrees) added to the third-person shell eject direction." );		
+		Asset.AddEntry_Path( "viewLastShotEjectEffect", "" ).SetTitle( "View Last Shot Eject FX" ).SetRelativePath( "share/raw" ).SetToolTip( "Effect ejected from the first-person gun on the shot that empties the clip. Empty uses View Shell Eject FX." );
+		Asset.AddEntry_Path( "worldLastShotEjectEffect", "" ).SetTitle( "World Last Shot Eject FX" ).SetRelativePath( "share/raw" ).SetToolTip( "Effect ejected from the third-person gun on the shot that empties the clip. Empty uses World Shell Eject FX." );
+		Asset.AddEntry_Path( "viewFireDelayStartEffect", "" ).SetTitle( "View Fire Delay Start FX" ).SetRelativePath( "share/raw" ).SetToolTip( "Effect played on the first-person gun when the fire delay starts." );
+		Asset.AddEntry_Path( "worldFireDelayStartEffect", "" ).SetTitle( "World Fire Delay Start FX" ).SetRelativePath( "share/raw" ).SetToolTip( "Effect played on the third-person gun when the fire delay starts." );
+		Asset.AddEntry_Path( "worldClipDropEffect", "" ).SetTitle( "World Clip Drop FX" ).SetRelativePath( "share/raw" ).SetToolTip( "Effect played where the dropped magazine (World Clip Model) leaves the gun during a reload." );
+		Asset.AddEntry_Int( "barrelCooldownMinCount", 0, 0, 1000 ).SetTitle( "FX Barrel Cooldown Min" ).SetToolTip( "The minimum bullet count.  If the player continuously fires the weapon after the player stops this effect will be played on tag flash." );
+		Asset.AddEntry_Path( "barrelCooldownEffect", "" ).SetTitle( "Barrel Cooldown FX" ).SetRelativePath( "share/raw" ).SetToolTip( "Effect played on the barrel while it cools down after sustained fire (smoke, heat)." );
+	}
+	
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+ 
+	// Impacts
+	
+	Asset.BeginCategory( "Impacts" );
+	{
+		Asset.AddEntry_AssetCombo( "normalImpactsFxTable", "impactsfxtable" ).SetTitle( "Enter Impacts FX Table" ).SetHints( "Enter Impact FX for this weapon" ).SetToolTip( "Impact effects table for bullets entering a surface (per surface type)." );
+		Asset.AddEntry_AssetCombo( "exitImpactsFxTable", "impactsfxtable" ).SetTitle( "Exit Impacts FX Table" ).SetHints( "Exit Impact FX for this weapon" ).SetToolTip( "Impact effects table for bullets exiting a surface after penetrating it." );
+		Asset.AddEntry_AssetCombo( "normalImpactsSoundsTable", "impactsoundstable" ).SetTitle( "Enter Impacts Sounds Table" ).SetHints( "Enter Impact Sounds for this weapon" ).SetToolTip( "Impact sounds table for bullets entering a surface (per surface type)." );
+		Asset.AddEntry_AssetCombo( "exitImpactsSoundsTable", "impactsoundstable" ).SetTitle( "Exit Impacts Sounds Table" ).SetHints( "Exit Impact Sounds for this weapon" ).SetToolTip( "Impact sounds table for bullets exiting a surface after penetrating it." );
+	}
+	
+	
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+ 
+	// Sounds
+	
+	Asset.BeginCategory( "Sounds", 0, 0.5, 0, "Icon_Sound.png" );
+	{
+		Asset.AddEntry_String( "pickupSound", "" ).SetTitle( "Pickup" ).SetToolTip( "Sound alias played when the weapon is picked up. Heard by everyone else; the (Player) field is what the shooter hears." );
+		Asset.AddEntry_String( "pickupSoundPlayer", "" ).SetTitle( "Pickup (Player)" ).SetToolTip( "Sound alias the shooter hears when the weapon is picked up." );
+		Asset.AddEntry_String( "ammoPickupSound", "" ).SetTitle( "Ammo Pickup" ).SetToolTip( "Sound alias played when ammo for this weapon is picked up. Heard by everyone else; the (Player) field is what the shooter hears." );
+		Asset.AddEntry_String( "ammoPickupSoundPlayer", "" ).SetTitle( "Ammo Pickup (Player)" ).SetToolTip( "Sound alias the shooter hears when ammo for this weapon is picked up." );
+		Asset.AddEntry_String( "fireSound", "" ).SetTitle( "Fire" ).SetToolTip( "Sound alias played for each shot. Heard by everyone else; the (Player) field is what the shooter hears." );
+		Asset.AddEntry_String( "fireSoundPlayer", "" ).SetTitle( "Fire (Player)" ).SetToolTip( "Fire sound used by player. If not defined, player will play normal 'Fire' that is used by the AI." );
+		Asset.AddEntry_String( "lastShotSound", "" ).SetTitle( "Last Shot (Player)" ).SetToolTip( "Sound alias the shooter hears for the shot that empties the clip." );
+		Asset.AddEntry_String( "lastShotSoundPlayer", "" ).SetTitle( "Last Shot (Player)" ).SetToolTip( "Last Shot sound used by player. If not defined, player will play normal 'Last Shot' that is used by the AI." );
+		Asset.AddEntry_String( "emptyFireSound", "" ).SetTitle( "Empty Fire" ).SetToolTip( "Sound alias played when the trigger is pulled with an empty clip (dry fire). Heard by everyone else; the (Player) field is what the shooter hears." );
+		Asset.AddEntry_String( "emptyFireSoundPlayer", "" ).SetTitle( "Empty Fire (Player)" ).SetToolTip( "Empty Fire sound used by player. If not defined, player will play normal 'Empty Fire' that is used by the AI." );
+		Asset.AddEntry_String( "startFireSound", "" ).SetTitle( "Start Fire" ).SetToolTip( "Sound alias played once when firing starts, before the loop fire sound. Heard by everyone else; the (Player) field is what the shooter hears." );
+		Asset.AddEntry_String( "startFireSoundPlayer", "" ).SetTitle( "Start Fire (Player)" ).SetToolTip( "Sound alias the shooter hears once when firing starts, before the loop fire sound." );
+		Asset.AddEntry_String( "fireBurstSound", "" ).SetTitle( "Fire Burst NPC" ).SetToolTip( "Sound alias played for a whole burst fired by an NPC (one sound instead of one per shot). Heard by everyone else; the (Player) field is what the shooter hears." );
+		Asset.AddEntry_String( "fireBurstSoundPlayer", "" ).SetTitle( "Fire Burst (Player)" ).SetToolTip( "Burst fire sound used by player." );
+		Asset.AddEntry_String( "suppressedRapidFireBurstSound", "" ).SetTitle( "Suppressed Rapid Fire Burst NPC" ).SetToolTip( "Sound alias played for a whole burst fired by an NPC with a suppressor and rapid fire. Heard by everyone else; the (Player) field is what the shooter hears." );
+		Asset.AddEntry_String( "suppressedRapidFireBurstSoundPlayer", "" ).SetTitle( "Suppressed Rapid Fire Burst (Player)" ).SetToolTip( "Suppressed Rapid Burst fire sound used by player." );
+		Asset.AddEntry_String( "loopFireSound", "" ).SetTitle( "Loop Fire" ).SetToolTip( "Sound alias played looping while the weapon fires continuously (replaces the per-shot fire sound). Heard by everyone else; the (Player) field is what the shooter hears." );
+		Asset.AddEntry_String( "loopFireSoundPlayer", "" ).SetTitle( "Loop Fire (Player)" ).SetToolTip( "Sound alias the shooter hears looping while the weapon fires continuously (replaces the per-shot fire sound)." );
+		Asset.AddEntry_String( "loopFireSoundLeft", "" ).SetTitle( "Loop Fire Left Hand" ).SetToolTip( "Sound alias played looping while the left gun fires continuously." );
+		Asset.AddEntry_String( "loopFireSoundPlayerLeft", "" ).SetTitle( "Loop Fire (Player) Left Hand" ).SetToolTip( "Sound alias the shooter hears looping while the left gun fires continuously." );
+		Asset.AddEntry_String( "loopFireEndSound", "" ).SetTitle( "Loop Fire End" ).SetToolTip( "Sound alias played when continuous fire stops (the tail of the loop fire sound). Heard by everyone else; the (Player) field is what the shooter hears." );
+		Asset.AddEntry_String( "loopFireEndSoundPlayer", "" ).SetTitle( "Loop Fire End (Player)" ).SetToolTip( "Sound alias the shooter hears when continuous fire stops (the tail of the loop fire sound)." );	
+		Asset.AddEntry_String( "suppressedRapidLoopFireSound", "" ).SetTitle( "Suppressed Rapid Fire Loop Fire" ).SetToolTip( "Sound alias played looping while a suppressed rapid fire weapon fires continuously. Heard by everyone else; the (Player) field is what the shooter hears." );
+		Asset.AddEntry_String( "suppressedRapidLoopFireSoundPlayer", "" ).SetTitle( "Suppressed Rapid Fire Loop Fire (Player)" ).SetToolTip( "Sound alias the shooter hears looping while a suppressed rapid fire weapon fires continuously." );
+		Asset.AddEntry_String( "killcamStartFireSound", "" ).SetTitle( "Killcam Start Fire" ).SetToolTip( "Sound alias played once when firing starts, in the killcam. Heard by everyone else; the (Player) field is what the shooter hears." );
+		Asset.AddEntry_String( "killcamStartFireSoundPlayer", "" ).SetTitle( "Killcam Start Fire (Player)" ).SetToolTip( "Sound alias the shooter hears once when firing starts, in the killcam." );
+		Asset.AddEntry_String( "crackSound", "" ).SetTitle( "crack" ).SetToolTip( "Sound to play when the glass cracks" );
+		Asset.AddEntry_String( "whizbySound", "" ).SetTitle( "whizby" ).SetToolTip( "Sound alias played when this weapon's bullets fly close past a player." );
+		Asset.AddEntry_String( "deploySound", "" ).SetTitle( "Deploy" ).SetToolTip( "Sound alias played when the weapon is deployed (mounted, set down). Heard by everyone else; the (Player) field is what the shooter hears." );
+		Asset.AddEntry_String( "deploySoundPlayer", "" ).SetTitle( "Deploy (Player)" ).SetToolTip( "Rechamber sound used by player. If not defined, player will play normal 'Deploy' that is used by the AI." );
+		Asset.AddEntry_String( "finishDeploySound", "" ).SetTitle( "Finish Deploy" ).SetToolTip( "Sound alias played when deploying the weapon finishes. Heard by everyone else; the (Player) field is what the shooter hears." );
+		Asset.AddEntry_String( "finishDeploySoundPlayer", "" ).SetTitle( "Finish Deploy (Player)" ).SetToolTip( "Rechamber sound used by player. If not defined, player will play normal 'Finish Deploy' that is used by the AI." );
+		Asset.AddEntry_String( "breakdownSound", "" ).SetTitle( "Breakdown" ).SetToolTip( "Sound alias played when a deployed weapon is broken down (picked back up). Heard by everyone else; the (Player) field is what the shooter hears." );
+		Asset.AddEntry_String( "breakdownSoundPlayer", "" ).SetTitle( "Breakdown (Player)" ).SetToolTip( "Rechamber sound used by player. If not defined, player will play normal 'Breakdown' that is used by the AI." );
+		Asset.AddEntry_String( "rechamberSound", "" ).SetTitle( "Rechamber" ).SetToolTip( "Sound alias played when the weapon rechambers between shots. Heard by everyone else; the (Player) field is what the shooter hears." );
+		Asset.AddEntry_String( "rechamberSoundPlayer", "" ).SetTitle( "Rechamber (Player)" ).SetToolTip( "Rechamber sound used by player. If not defined, player will play normal 'Rechamber' that is used by the AI." );
+		Asset.AddEntry_String( "reloadSound", "" ).SetTitle( "Reload" ).SetToolTip( "Sound alias played for a reload with rounds still in the clip. Heard by everyone else; the (Player) field is what the shooter hears." );
+		Asset.AddEntry_String( "reloadSoundPlayer", "" ).SetTitle( "Reload (Player)" ).SetToolTip( "Reload sound used by player. If not defined, player will play normal 'Reload' that is used by the AI." );
+		Asset.AddEntry_String( "reloadEmptySound", "" ).SetTitle( "Reload Empty" ).SetToolTip( "Sound alias played for a reload with an empty clip. Heard by everyone else; the (Player) field is what the shooter hears." );
+		Asset.AddEntry_String( "reloadEmptySoundPlayer", "" ).SetTitle( "Reload Empty (Player)" ).SetToolTip( "Reload Empty sound used by player. If not defined, player will play normal 'Reload Empty' that is used by the AI." );
+		Asset.AddEntry_String( "reloadStartSound", "" ).SetTitle( "Reload Start" ).SetToolTip( "Sound alias played at the start of a segmented reload. Heard by everyone else; the (Player) field is what the shooter hears." );
+		Asset.AddEntry_String( "reloadStartSoundPlayer", "" ).SetTitle( "Reload Start (Player)" ).SetToolTip( "Reload Start sound used by player. If not defined, player will play normal 'Reload Start' that is used by the AI." );
+		Asset.AddEntry_String( "reloadEndSound", "" ).SetTitle( "Reload End" ).SetToolTip( "Sound alias played at the end of a segmented reload. Heard by everyone else; the (Player) field is what the shooter hears." );
+		Asset.AddEntry_String( "reloadEndSoundPlayer", "" ).SetTitle( "Reload End (Player)" ).SetToolTip( "Reload End sound used by player. If not defined, player will play normal 'Reload End' that is used by the AI." );
+		Asset.AddEntry_String( "altSwitchSound", "" ).SetTitle( "Alt Switch" ).SetToolTip( "Sound alias played when switching to or from the alternate mode. Heard by everyone else; the (Player) field is what the shooter hears." );
+		Asset.AddEntry_String( "altSwitchSoundPlayer", "" ).SetTitle( "Alt Switch (Player)" ).SetToolTip( "Sound alias the shooter hears when switching to or from the alternate mode." );
+		Asset.AddEntry_String( "raiseSound", "" ).SetTitle( "Raise" ).SetToolTip( "Sound alias played when the weapon is pulled out. Heard by everyone else; the (Player) field is what the shooter hears." );
+		Asset.AddEntry_String( "raiseSoundPlayer", "" ).SetTitle( "Raise (Player)" ).SetToolTip( "Sound alias the shooter hears when the weapon is pulled out." );
+		Asset.AddEntry_String( "firstRaiseSound", "" ).SetTitle( "First Raise" ).SetToolTip( "Sound alias played the first time the weapon is pulled out. Heard by everyone else; the (Player) field is what the shooter hears." );
+		Asset.AddEntry_String( "firstRaiseSoundPlayer", "" ).SetTitle( "First Raise (Player)" ).SetToolTip( "Sound alias the shooter hears the first time the weapon is pulled out." );
+		Asset.AddEntry_String( "putawaySound", "" ).SetTitle( "Put Away" ).SetToolTip( "Sound alias played when the weapon is put away. Heard by everyone else; the (Player) field is what the shooter hears." );
+		Asset.AddEntry_String( "putawaySoundPlayer", "" ).SetTitle( "Put Away (Player)" ).SetToolTip( "Sound alias the shooter hears when the weapon is put away." );
+		Asset.AddEntry_String( "shellCasing", "" ).SetTitle( "Shell Casing" ).SetToolTip( "Sound alias played for the shell casings hitting the ground. Heard by everyone else; the (Player) field is what the shooter hears." );
+		Asset.AddEntry_String( "shellCasingPlayer", "" ).SetTitle( "Shell Casing (Player)" ).SetToolTip( "Sound alias the shooter hears for the shell casings hitting the ground." );		
+		Asset.AddEntry_String( "holdFireSound", "" ).SetTitle( "Hold Fire" ).SetToolTip( "Sound alias played while the fire button is held on a hold-to-fire weapon. Heard by everyone else; the (Player) field is what the shooter hears." );
+		Asset.AddEntry_String( "holdFireSoundPlayer", "" ).SetTitle( "Hold Fire (Player)" ).SetToolTip( "Hold fire sound used by player. If not defined, player will play normal 'Fire' that is used by the AI." );
+		Asset.AddEntry_String( "chargeShotMaxSound", "" ).SetTitle( "Charge Shot Max" ).SetToolTip( "Sound alias played when a charge shot reaches full charge. Heard by everyone else; the (Player) field is what the shooter hears." );
+		Asset.AddEntry_String( "chargeShotMaxSoundPlayer", "" ).SetTitle( "Charge Shot Max(Player)" ).SetToolTip( "Sound played when charge shot weapon reaches max. If not defined, player will play normal 'Fire' that is used by the AI." );
+	}
+	
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+ 	
+	// Rumbles
+	
+	Asset.BeginCategory( "Rumbles" );
+	{
+		Asset.AddEntry_AssetCombo( "fireRumble", "rumble" ).SetTitle( "Fire Rumble" ).SetToolTip( "Controller rumble played for each shot." );
+		Asset.AddEntry_AssetCombo( "holdFireRumble", "rumble" ).SetTitle( "Hold Fire Rumble" ).SetToolTip( "Controller rumble played while the fire button is held on a hold-to-fire weapon." );
+		Asset.AddEntry_AssetCombo( "chargeShotMaxLoopRumble", "rumble" ).SetTitle( "Charge Shot Max Loop Rumble" ).SetToolTip( "Controller rumble looping while a charge shot is held at full charge." );
+	}
+	
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+	
+	// User Interface
+ 
+	Asset.BeginCategory( "User Interface" );
+	{
+		Asset.AddEntry_AssetCombo( "hudIcon", "image" ).SetTitle( "Hud Icon" ).SetToolTip( "Image of the weapon shown on the HUD (weapon switch, pickups)." );
+		Asset.AddEntry_Combo( "hudIconRatio", "4:1 | 1:1 | 2:1" ).SetTitle( " Aspect:" ).SetToolTip( "Aspect ratio (width:height) the Hud Icon image is drawn at." );
+		Asset.AddEntry_AssetCombo( "killIcon", "image" ).SetTitle( "Kill Icon" ).SetToolTip( "Image shown in the kill feed for kills with this weapon." );
+		Asset.AddEntry_Combo( "killIconRatio", "4:1 | 1:1 | 2:1" ).SetTitle( " Aspect:" ).SetToolTip( "Aspect ratio (width:height) the Kill Icon image is drawn at." );
+		Asset.AddEntry_CheckBox( "flipKillIcon", true ).SetTitle( " Flip:" ).SetToolTip( "Used for weapons that need to have their kill icon horizontally flipped before displaying. (For MP obituaries)." );
+		Asset.AddEntry_AssetCombo( "dpadIcon", "image" ).SetTitle( "DPad Icon" ).SetToolTip( "Image shown on the d-pad slot when this weapon sits there." );
+		Asset.AddEntry_Combo( "dpadIconRatio", "4:1 | 1:1 | 2:1" ).SetTitle( " Aspect:" ).SetToolTip( "Aspect ratio (width:height) the DPad Icon image is drawn at." );
+		Asset.AddEntry_AssetCombo( "ammoCounterIcon", "image" ).SetTitle( "Ammo Counter Icon" ).SetToolTip( "Image drawn beside the ammo counter." );
+		Asset.AddEntry_Combo( "ammoCounterIconRatio", "4:1 | 1:1" ).SetTitle( " Aspect:" ).SetToolTip( "Aspect ratio (width:height) the Ammo Counter Icon image is drawn at." );	
+		Asset.AddEntry_Combo( "ammoCounterClip", "None | Magazine | ShortMagazine | Shotgun | Rocket | Beltfed | AltWeapon" ).SetTitle( "Ammo Counter Clip Style" ).SetToolTip( "Style of the clip graphic in the ammo counter (magazine, short magazine, shotgun shells, rocket, belt fed, alt weapon)." );
+	}
+	
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+ 
+	// Depth of Field Settings
+	
+	Asset.BeginCategory( "Depth of Field Settings" );   
+	{
+		Asset.AddEntry_Float( "adsDofStart", 0, 0, 100 ).SetTitle( "ADS Start" ).SetStep( 0.1 ).SetToolTip( "Distance where the depth of field used while aiming down sights starts (see ADS End)." );
+		Asset.AddEntry_Float( "adsDofEnd", 0, 0, 100 ).SetTitle( "ADS End" ).SetStep( 0.1 ).SetToolTip( "Distance where the depth of field used while aiming down sights ends (see ADS Start)." );
+	}
+
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+	
+	// Grenade Preparation FX ( unused )
+	
+	// -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+ 
+	// Left-Hand Grip Adjustment
+	
+	Asset.BeginCategory( "Left-Hand Grip Adjustment" );
+	{
+		Asset.AddEntry_Float( "ikLeftHandIdlePosF", 0, -180, 180 ).SetTitle( "Idle Fwd" ).SetHints( "NOWARNINGS" ).SetStep( 0.1 ).SetToolTip( "Left-hand IK: forward position of the left hand in the idle pose (inches)." );
+		Asset.AddEntry_Float( "ikLeftHandIdlePosR", 0, -180, 180 ).SetTitle( "Idle Right" ).SetHints( "NOWARNINGS" ).SetStep( 0.1 ).SetToolTip( "Left-hand IK: right position of the left hand in the idle pose (inches)." );
+		Asset.AddEntry_Float( "ikLeftHandIdlePosU", 0, -180, 180 ).SetTitle( "Idle Up" ).SetHints( "NOWARNINGS" ).SetStep( 0.1 ).SetToolTip( "Left-hand IK: up position of the left hand in the idle pose (inches)." );
+		Asset.AddEntry_Float( "ikLeftHandOffsetF", 0, -180, 180 ).SetTitle( "Offset Fwd" ).SetStep( 0.1 ).SetToolTip( "Left-hand IK: forward offset of the left-hand grip (inches)." );
+		Asset.AddEntry_Float( "ikLeftHandOffsetR", 0, -180, 180 ).SetTitle( "Offset Right" ).SetStep( 0.1 ).SetToolTip( "Left-hand IK: right offset of the left-hand grip (inches)." );
+		Asset.AddEntry_Float( "ikLeftHandOffsetU", 0, -180, 180 ).SetTitle( "Offset Up" ).SetStep( 0.1 ).SetToolTip( "Left-hand IK: up offset of the left-hand grip (inches)." );
+		Asset.AddEntry_Float( "ikLeftHandRotationP", 0, -180, 180 ).SetTitle( "Offset Pitch" ).SetToolTip( "Left-hand IK: pitch rotation of the left-hand grip (degrees)." );
+		Asset.AddEntry_Float( "ikLeftHandRotationY", 0, -180, 180 ).SetTitle( "Offset Yaw" ).SetToolTip( "Left-hand IK: yaw rotation of the left-hand grip (degrees)." );
+		Asset.AddEntry_Float( "ikLeftHandRotationR", 0, -180, 180 ).SetTitle( "Offset Roll" ).SetToolTip( "Left-hand IK: roll rotation of the left-hand grip (degrees)." );
+	}
+} 
+

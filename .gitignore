@@ -1,0 +1,18 @@
+# build output and packages
+build/
+dist/
+.vs/
+__pycache__/
+*.log
+*.dmp
+*.obj
+*.vcxproj.user
+
+# plugin SDK: build output of standalone builds, projects made with NewPlugin.bat
+sdk/**/bin/
+sdk/**/obj/
+sdk/**/out/
+sdk/MyPlugins/
+
+# DXVK binaries are fetched separately
+plugins/RadiantPlus/dxvk/*.dll

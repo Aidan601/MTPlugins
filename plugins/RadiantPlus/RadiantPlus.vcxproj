@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <Keyword>Win32Proj</Keyword>
+    <ProjectGuid>{5D2B9E61-7A43-4C1F-9B8D-3E6F1A0C7D29}</ProjectGuid>
+    <RootNamespace>RadiantPlus</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+    <ProjectName>RadiantPlus</ProjectName>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v145</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v145</PlatformToolset>
+    <WholeProgramOptimization>false</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup>
+    <OutDir>$(SolutionDir)build\$(Configuration)\plugins\RadiantPlus\</OutDir>
+    <IntDir>$(SolutionDir)build\obj\$(ProjectName)\$(Configuration)\</IntDir>
+    <TargetName>RadiantPlus</TargetName>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <SDLCheck>true</SDLCheck>
+      <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <PreprocessorDefinitions>_WINDOWS;_USRDLL;WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)..\..\sdk;$(ProjectDir)..\common;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <DisableSpecificWarnings>4996;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalDependencies>user32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+    <PostBuildEvent>
+      <Command>if not exist "$(SolutionDir)build\$(Configuration)\plugins\RadiantPlus\RadiantPlus.ini" copy /y "$(ProjectDir)RadiantPlus.ini" "$(SolutionDir)build\$(Configuration)\plugins\RadiantPlus\RadiantPlus.ini" &gt;nul
+xcopy /y /i /d /e "$(SolutionDir)themes" "$(SolutionDir)build\$(Configuration)\plugins\RadiantPlus\themes\" &gt;nul</Command>
+    </PostBuildEvent>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <PreprocessorDefinitions>_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <PreprocessorDefinitions>NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+    </ClCompile>
+    <Link>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="radiantplus.cpp" />
+    <ClCompile Include="ray_guiding.cpp" />
+    <ClCompile Include="bake_guiding.cpp" />
+    <ClCompile Include="cone_correct.cpp" />
+    <ClCompile Include="bake_fill.cpp" />
+    <ClCompile Include="bake_gather.cpp" />
+    <ClCompile Include="bake_tracecache.cpp" />
+    <ClCompile Include="bake_lowrays.cpp" />
+    <ClCompile Include="crashguard.cpp" />
+    <ClCompile Include="image_formats.cpp" />
+    <ClCompile Include="xylod.cpp" />
+    <ClCompile Include="camwalk.cpp" />
+    <ClCompile Include="campresets.cpp" />
+    <ClCompile Include="gamefov.cpp" />
+    <ClCompile Include="loadprefetch.cpp" />
+    <ClCompile Include="assettouch.cpp" />
+    <ClCompile Include="filesearch.cpp" />
+    <ClCompile Include="filtercache.cpp" />
+    <ClCompile Include="fxswap.cpp" />
+    <ClCompile Include="fxpreview.cpp" />
+    <ClCompile Include="prefabexplore.cpp" />
+    <ClCompile Include="filedialogs.cpp" />
+    <ClCompile Include="dynbuffers.cpp" />
+    <ClCompile Include="prefswindow.cpp" />
+    <ClCompile Include="actionlog.cpp" />
+    <ClCompile Include="rotgizmo.cpp" />
+    <ClCompile Include="themes.cpp" />
+    <ClCompile Include="..\common\themeicons.cpp" />
+    <ClCompile Include="..\common\themeeditor.cpp" />
+    <ClCompile Include="..\common\discordrpc.cpp" />
+    <ResourceCompile Include="RadiantPlus.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\..\sdk\modtools_plugin.h" />
+    <ClInclude Include="..\common\themeicons.h" />
+    <ClInclude Include="..\common\themeeditor.h" />
+    <ClInclude Include="..\common\discordrpc.h" />
+    <ClInclude Include="ray_guiding.h" />
+    <ClInclude Include="bake_guiding.h" />
+    <ClInclude Include="cone_correct.h" />
+    <ClInclude Include="bake_fill.h" />
+    <ClInclude Include="bake_gather.h" />
+    <ClInclude Include="bake_tracecache.h" />
+    <ClInclude Include="bake_lowrays.h" />
+    <ClInclude Include="crashguard.h" />
+    <ClInclude Include="image_formats.h" />
+    <ClInclude Include="xylod.h" />
+    <ClInclude Include="camwalk.h" />
+    <ClInclude Include="campresets.h" />
+    <ClInclude Include="gamefov.h" />
+    <ClInclude Include="dxvk.h" />
+    <ClInclude Include="loadprefetch.h" />
+    <ClInclude Include="assettouch.h" />
+    <ClInclude Include="filesearch.h" />
+    <ClInclude Include="filtercache.h" />
+    <ClInclude Include="fxswap.h" />
+    <ClInclude Include="fxpreview.h" />
+    <ClInclude Include="prefabexplore.h" />
+    <ClInclude Include="filedialogs.h" />
+    <ClInclude Include="dynbuffers.h" />
+    <ClInclude Include="prefswindow.h" />
+    <ClInclude Include="actionlog.h" />
+    <ClInclude Include="rotgizmo.h" />
+    <ClInclude Include="themes.h" />
+    <ClInclude Include="..\..\sdk\modtools_plugin.hpp" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

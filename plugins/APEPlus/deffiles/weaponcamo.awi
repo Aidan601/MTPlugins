@@ -1,0 +1,128 @@
+// APE Plus copy of deffiles\weaponcamo.awi (2026-10-01). Only change: which fields rebuild the grid on a change.
+// Num Base Materials rebuilds it (the stock file did not, so new slots stayed hidden until something else rebuilt);
+// Base Material and Camo Mask no longer do (they do not change the layout, and every pick rebuilt all 75 camos).
+// Same entries, keys, defaults and limits as the installed file.
+
+const int MAX_CAMOS = 75;
+const int MAX_PARTS = 2;
+const int MAX_BASE_MATERIALS = 10;
+
+void CopySingleBaseMaterials( asset Asset, string from, string to )
+{
+	for ( int p = 1; p <= MAX_PARTS; p++ )
+	{
+		string fromPrefix = "material" + p + "_" + from + "_";
+		string toPrefix = "material" + p + "_" + to + "_";
+
+		int numBaseMaterials = Asset.GetEntryInt( fromPrefix + "numBaseMaterials" );
+		Asset.GetEntryVariable( toPrefix + "numBaseMaterials" ).SetInt( numBaseMaterials );
+		Asset.GetEntryVariable( toPrefix + "numBaseMaterials" ).ForceSpecified();
+
+		if ( numBaseMaterials > 0 )
+		{
+			for ( int i = 1 ; i <= numBaseMaterials ; i++ )
+			{
+				string baseMat = Asset.GetEntryValue( fromPrefix + "base_material_" + i );
+				Asset.GetEntryVariable( toPrefix + "base_material_" + i ).SetValue( baseMat );
+				Asset.GetEntryVariable( toPrefix + "base_material_" + i ).ForceSpecified();
+
+				string maskImage = Asset.GetEntryValue( fromPrefix + "camo_mask_" + i );
+				Asset.GetEntryVariable( toPrefix + "camo_mask_" + i ).SetValue( maskImage );
+				Asset.GetEntryVariable( toPrefix + "camo_mask_" + i ).ForceSpecified();
+			}
+		}
+	}
+}
+
+void CopyBaseMaterials( asset Asset, const string& params )
+{
+	array<string> fromTo = params.Split(".");
+
+	if ( fromTo.length() == 1 )
+	{
+		string from = fromTo[0];
+		for ( int toInt = from.ToInt() + 1; toInt <= MAX_CAMOS; toInt++ )
+		{
+			CopySingleBaseMaterials( Asset, from, "" + toInt );
+		}
+	}
+	else
+	{
+		string to = fromTo[0];
+		string from = fromTo[1];
+		CopySingleBaseMaterials( Asset, from, to );
+	}
+}
+
+void GenerateUI( asset Asset )
+{
+	// Hidden
+ 
+	Asset.AddEntry_String( "configstringFileType", "WEAPONCAMO" ).Show( false );	
+
+	Asset.AddEntry_Int( "numCamos", 0, 0, MAX_CAMOS ).SetTitle( "Num Camos" ).UpdateOnChange(true);
+	int numCamos = Asset.GetEntryInt( "numCamos" );
+	Asset.AddEntry_Int( "baseIndex", 1, 1, 256 ).SetTitle( "Base index of the table" ).UpdateOnChange(true);
+	int baseIndex = Asset.GetEntryInt( "baseIndex" );
+
+	for ( int c = 1; c <= MAX_CAMOS; c++ )
+	{
+		string baseCategory = "Camo Type " + ( baseIndex - 1 + c );
+		bool camoVisible = c <= numCamos;
+
+		Asset.BeginCategory( baseCategory );
+		{
+			bool buttonVisible = ( c > 1 ) && camoVisible;
+			Asset.AddEntry_ButtonGroup( "copyFromFirst" + c ).SetTitle( "Copy:" ).SetSave( false );
+			Asset.GetEntryControl( "copyFromFirst" + c ).AddButton( "Copy from First", "", "void CopyBaseMaterials( asset Asset, const string& params )", "" + c + ".1" ).Show( buttonVisible ).ForceSpecified();
+			Asset.GetEntryControl( "copyFromFirst" + c ).AddButton( "Copy from Previous", "", "void CopyBaseMaterials( asset Asset, const string& params )", "" + c + "." + ( c - 1 ) ).Show( buttonVisible ).ForceSpecified();
+			Asset.GetEntryControl( "copyFromFirst" + c ).AddButton( "Copy to all next", "", "void CopyBaseMaterials( asset Asset, const string& params )", "" + c ).Show( buttonVisible ).ForceSpecified();
+
+			for ( int p = 1; p <= MAX_PARTS; p++ )
+			{
+				string category = baseCategory + ".Material " + p;
+				Asset.BeginCategory( category );
+				{
+					string prefix = "material" + p + "_" + c + "_";
+					Asset.BeginCategory( category + ".Base Materials" );
+					{
+						Asset.AddEntry_Int( prefix + "numBaseMaterials", 0, 0, MAX_BASE_MATERIALS ).SetTitle( "Num Base Materials" ).Show( camoVisible ).UpdateOnChange(true);
+						int numBaseMaterials = Asset.GetEntryInt( prefix + "numBaseMaterials" );
+
+						for ( int bm = 1; bm <= MAX_BASE_MATERIALS; bm++ )
+						{
+							bool baseMaterialVisible = ( bm <= numBaseMaterials ) && camoVisible;
+							Asset.BeginCategory( category + ".Base Materials.Base " + bm );
+							{
+								Asset.AddEntry_AssetCombo( prefix + "base_material_" + bm, "material" ).Show( baseMaterialVisible ).SetTitle( "Base Material:" );
+								Asset.AddEntry_AssetCombo( prefix + "camo_mask_" + bm, "image" ).Show( baseMaterialVisible ).SetTitle( "Camo Mask:" );
+							}
+						}
+					}
+
+					Asset.BeginCategory( category + ".Camo" );
+					{
+						Asset.AddEntry_AssetCombo( prefix + "material", "material" ).SetTitle( "Replace with:" ).Show( camoVisible );
+						Asset.AddEntry_Vector2( prefix + "trans_x", prefix + "trans_y", 0, 0, 0, 1 ).SetTitle( "Translate" ).SetStep( 0.01f ).Show( camoVisible );
+						Asset.AddEntry_Vector2( prefix + "scale_x", prefix + "scale_y", 1, 1, 0.1, 10 ).SetTitle( "Scale" ).SetStep( 0.01f ).Show( camoVisible );
+						Asset.AddEntry_Float( prefix + "rotation", 0, 0, 1 ).SetTitle( "Rotate" ).SetStep( 0.001f ).SetToolTip( "Rotate the camo - a fraction of a circle (1 == 360 degrees)." ).Show( camoVisible );
+						Asset.AddEntry_CheckBox( prefix + "useNormalMap", false ).SetTitle( "Normal Map" ).SetToolTip( "Use the base material's normal map in the camo material." ).Show( camoVisible );
+						Asset.AddEntry_Float( prefix + "normal_amount", 0, 0, 1 ).SetTitle( "Normal Map blend" ).SetStep( 0.01f ).SetToolTip( "0: use camo normal map, 1: use weapon normal map" ).Show( camoVisible );
+						Asset.AddEntry_CheckBox( prefix + "useGlossMap", false ).SetTitle( "Gloss Map" ).SetToolTip( "Use the base material's gloss map in the camo material." ).Show( camoVisible );
+						Asset.AddEntry_Float( prefix + "gloss_blend", 0, 0, 1 ).SetTitle( "Gloss Map blend" ).SetStep( 0.01f ).SetToolTip( "0: use camo gloss map, 1: use weapon gloss map" ).Show( camoVisible );
+
+						Asset.BeginCategory( category + ".Camo.Detail Normal:" );
+						{
+							Asset.AddEntry_AssetCombo( prefix + "detail_normal_map", "image" ).SetTitle( "Detail Normal" ).SetToolTip( "Optional detail normal injected into the camo material" ).UpdateOnChange(true).Show( camoVisible );
+							bool hasDetailNormal = ( Asset.GetEntryValue( prefix + "detail_normal_map" ) != "" ) && camoVisible;
+
+							Asset.AddEntry_Float( prefix + "detail_normal_height", 1.0, 0.0, 1.0 ).SetTitle( "Detail Height Scale" ).SetStep( 0.01f ).SetToolTip( "A higher number makes the detail map more bumpy. (1.0 is default)" ).Show( hasDetailNormal );
+							Asset.AddEntry_Vector2( prefix + "detail_normal_scale_x", prefix + "detail_normal_scale_y", 8, 8, 0.125, 256 ).SetStep( 0.1f ).SetTitle( "Detail Scale (X, Y)" ).Show( hasDetailNormal );
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
