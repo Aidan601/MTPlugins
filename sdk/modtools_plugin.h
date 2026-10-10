@@ -302,6 +302,30 @@ typedef struct ModToolsPatchVert
     int col;
 } ModToolsPatchVert;
 
+/* In-memory replacement for the LUT texture used by Radiant's camera preview. Pixel data is
+ * tightly packed RGB uint16 values in row-major order. The host copies the buffers during the call.
+ * Pass referenceRgb only when setting/changing the camera's native base texture; pass NULL on later
+ * wheel updates to retain the prior reference. */
+typedef struct ModToolsCameraLutPreview
+{
+    uint32_t size;
+    uint32_t width;
+    uint32_t height;
+    const uint16_t* referenceRgb;
+    const uint16_t* previewRgb;
+    int enabled;
+} ModToolsCameraLutPreview;
+
+enum
+{
+    MODTOOLS_CAMERA_LUT_PREVIEW_OFF = 0,
+    MODTOOLS_CAMERA_LUT_PREVIEW_WAITING = 1,
+    MODTOOLS_CAMERA_LUT_PREVIEW_ACTIVE = 2,
+    MODTOOLS_CAMERA_LUT_PREVIEW_UNSUPPORTED = 3,
+    MODTOOLS_CAMERA_LUT_PREVIEW_NO_MATCH = 4,
+    MODTOOLS_CAMERA_LUT_PREVIEW_MATCHED = 5
+};
+
 /* ---- host services: the first argument is always your plugin handle ------------------------ */
 typedef struct ModToolsHostApi
 {
@@ -500,6 +524,10 @@ typedef struct ModToolsHostApi
     /* [Radiant] MAIN THREAD (check rp::Has): move your closed pane into the tab group of Radiant's pane titled `beside` ("Camera", "Entity Info")
      * and raise it (returns 1), or raise one that is already open behind another tab (2). 0 = left alone, `beside` is missing or hidden. */
     int  (*TabPaneWith)(ModToolsPlugin* p, ModToolsPane pane, const char* beside);
+    /* [Radiant] MAIN THREAD: replace the matching camera LUT texture in memory only; the host copies both buffers. */
+    void (*SetCameraLutPreview)(ModToolsPlugin* p, const ModToolsCameraLutPreview* preview);
+    /* OFF, WAITING, ACTIVE, UNSUPPORTED, NO_MATCH, or MATCHED for the selected camera LUT. */
+    int  (*CameraLutPreviewStatus)(ModToolsPlugin* p);
 } ModToolsHostApi;
 
 /* ---- [APE] Asset Property Editor services: host->ape (NULL in Radiant and the launcher), MAIN THREAD unless noted ------------- */

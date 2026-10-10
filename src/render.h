@@ -15,6 +15,10 @@ namespace render
     bool Init();
     void Shutdown();
 
+    // Editor-only in-memory camera LUT texture substitution. Buffers are copied before return.
+    void SetCameraLutPreview(const ModToolsCameraLutPreview* preview);
+    int CameraLutPreviewStatus();
+
     void BeginCamView(const CamParams& p);   // called right before Radiant draws the 3D view
     void BeginXYView(const XYParams& p);     // called right before Radiant draws a 2D view
     void EndView();                          // called when the view's draw call returned

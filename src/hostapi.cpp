@@ -460,6 +460,14 @@ namespace
         hooks::RequestRedraw(bits);
     }
     int  H_CamXYUpdateOnDrag(ModToolsPlugin* p) { return Ok(p) && hooks::CamXYUpdateOnDrag() ? 1 : 0; }
+    void H_SetCameraLutPreview(ModToolsPlugin* p, const ModToolsCameraLutPreview* preview)
+    {
+        if (Ok(p)) render::SetCameraLutPreview(preview);
+    }
+    int H_CameraLutPreviewStatus(ModToolsPlugin* p)
+    {
+        return Ok(p) ? render::CameraLutPreviewStatus() : MODTOOLS_CAMERA_LUT_PREVIEW_OFF;
+    }
     int  H_MoveBrush(ModToolsPlugin* p, ModToolsBrush b, const float delta[3])
     {
         return Ok(p) && rt::VerifyBinary() && hooks::MoveBrush(static_cast<hooks::RadPtr>(b), delta) ? 1 : 0;
@@ -798,7 +806,7 @@ namespace
     };
 
     ModToolsHostApi g_api = {
-        sizeof(ModToolsHostApi), MODTOOLS_PLUGIN_API_VERSION, (1u << 16) | (1u << 8) | 0u,   // 1.1.0
+        sizeof(ModToolsHostApi), MODTOOLS_PLUGIN_API_VERSION, (1u << 16) | (2u << 8) | 0u,   // 1.2.0
         PluginDir, PluginsRoot, RadiantRoot,
         Log, LogW,
         ConfigGet, ConfigGetInt, ConfigSet,
@@ -837,6 +845,8 @@ namespace
         NativeModelPreviewDrawCountForId,
         SetNativeModelCullBounds,
         TabPaneWith,
+        H_SetCameraLutPreview,
+        H_CameraLutPreviewStatus,
     };
 }
 
