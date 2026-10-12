@@ -6,6 +6,7 @@
 #include "launchertheme.h"
 #include "publish.h"
 #include "lightquality.h"
+#include "steamstart.h"
 #include "discordrpc.h"
 #include <windows.h>
 #include <tlhelp32.h>
@@ -392,6 +393,7 @@ namespace
         g_status = "Active for this launcher. Unticking Launcher+ in any Plugins window turns it off for the next build; "
                    "a build already running is not changed.";
         rp::Log("%s", g_status.c_str());
+        steamstart::Setup(g_bin);   // modtools_launcher.bat, the file Steam runs
         AddLauncherMenu();
         launchertheme::Setup(g_ini);     // the themes, picked in Edit > Options
         publish::Setup();                // the Publish Mod dialog: thumbnail check, Workshop Description
@@ -435,6 +437,7 @@ namespace
             for (const Toggle& t : g_toggles) reply += std::string(" ") + t.label + (IsOn(t) ? ": on." : ": off.");
             reply += " " + lightquality::Status() + ".";
             reply += DefenderApplied() ? " Defender exclusions: applied." : " Defender exclusions: not applied.";
+            reply += " " + steamstart::Status() + ".";
             return reply.c_str();
         }
         if (cmd == "defender add" || cmd == "defender remove")   // same path as the menu, minus the question
@@ -455,7 +458,7 @@ extern "C" MODTOOLS_PLUGIN_EXPORT const ModToolsPluginApi* ModToolsPluginEntry(M
     api.apiVersion = MODTOOLS_PLUGIN_API_VERSION;
     api.name = "LauncherPlus";
     api.displayName = "Launcher+";
-    api.version = "1.0.0";
+    api.version = "1.1.0";
     api.author = "Figglebottom";
     api.description = "QOL fixes and improvements to the Launcher.";
     api.url = "https://github.com/Aidan601/MTPlugins/tree/main/plugins/LauncherPlus";

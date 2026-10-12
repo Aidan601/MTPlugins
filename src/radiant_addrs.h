@@ -272,6 +272,7 @@ namespace rt
     constexpr uintptr_t Patch_ConnectToCandidate = 0x1407BF640; // what the dispatcher calls in that case (not called directly)
     constexpr uintptr_t Patch_InsertDelete   = 0x1407956A0; // (insert, column, first) over the selected brushes (menu wrappers 0x140655DB0..EA0)
     constexpr uintptr_t Patch_Resize         = 0x14078E1D0; // (patch, rows, cols): remaps the vertex selection by index
+    constexpr uintptr_t Patch_RebuildMesh    = 0x1407A49C0; // (patch): re-tessellates the render mesh from the control net
 
     // CXYWnd layout fragments (from XY_Draw)
     constexpr size_t    off_XYWnd_Scale        = 132;      // float pixels per unit

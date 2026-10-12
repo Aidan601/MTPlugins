@@ -15,6 +15,8 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="BuildPlusLinkerRT.cpp" />
+    <ClCompile Include="..\..\common\third_party\meshoptimizer\simplifier.cpp" />
+    <ClCompile Include="..\..\common\third_party\meshoptimizer\allocator.cpp" />
     <ClCompile Include="..\..\..\src\third_party\minhook\src\buffer.c" />
     <ClCompile Include="..\..\..\src\third_party\minhook\src\hook.c" />
     <ClCompile Include="..\..\..\src\third_party\minhook\src\trampoline.c" />

@@ -4,6 +4,7 @@
 #include "dynbuffers.h"
 #include <windows.h>
 #include <d3d11.h>
+#include <dxgi1_4.h>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -24,6 +25,12 @@ namespace
     const size_t kCursorWindow = 4u << 20;
     const uint64_t kFullLookMs = 2000;
     const uint64_t kCommitMargin = 4ull << 30;  // free commit that must stay after a copy is made
+    const uint64_t kPhysMargin = 2ull << 30;    // free RAM that must stay after a copy is made
+    const uint64_t kPhysDrop = 1ull << 30;      // twins are given back below this much free RAM
+    const double kVramStartShare = 0.6;         // video memory use after a new twin, share of the budget
+    const double kVramTwinShare = 0.25;         // all twins together, share of the budget
+    const double kVramDropShare = 0.9;          // twins are given back above this share of the budget
+    const uint64_t kWatchMs = 1000;
 
     // {6B1F3D52-9C0E-4E4B-A1B7-52D4F0C3A9E1}
     const GUID kTagGuid = { 0x6b1f3d52, 0x9c0e, 0x4e4b, { 0xa1, 0xb7, 0x52, 0xd4, 0xf0, 0xc3, 0xa9, 0xe1 } };
@@ -56,6 +63,9 @@ namespace
     ID3D11DeviceContext*  g_ctx = nullptr;
     ID3D11Device*         g_dev = nullptr;
     ID3D11Buffer*         g_scratch = nullptr;  // dynamic, carries one chunk to the GPU
+    IDXGIAdapter3*        g_adapter = nullptr;  // video memory budget, nullptr = unknown so no twins
+    uint64_t g_twinBytes = 0;
+    uint64_t g_lastWatch = 0;
     CreateBufferFn g_oCreateBuffer = nullptr;
     MapFn   g_oMap = nullptr;
     UnmapFn g_oUnmap = nullptr;
@@ -82,7 +92,7 @@ namespace
 
     void FreeSlot(Slot* s)
     {
-        if (s->twin) { s->twin->Release(); --g_twins; }
+        if (s->twin) { s->twin->Release(); --g_twins; g_twinBytes -= s->size; }
         if (s->mem) VirtualFree(s->mem, 0, MEM_RELEASE);
         *s = Slot{};
         while (g_used > 0 && !g_slots[g_used - 1].dyn) --g_used;
@@ -171,6 +181,28 @@ namespace
         return ok;
     }
 
+    bool Vram(DXGI_QUERY_VIDEO_MEMORY_INFO& vi)
+    {
+        return g_adapter && SUCCEEDED(g_adapter->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &vi)) && vi.Budget;
+    }
+
+    // Empty when a twin and copy of `size` bytes fit, else why not
+    std::string NoRoom(uint64_t size)
+    {
+        char why[160] = {};
+        MEMORYSTATUSEX ms = {}; ms.dwLength = sizeof ms;
+        DXGI_QUERY_VIDEO_MEMORY_INFO vi = {};
+        if (!GlobalMemoryStatusEx(&ms)) snprintf(why, sizeof why, "memory status unknown");
+        else if (ms.ullAvailPageFile < size + kCommitMargin) snprintf(why, sizeof why, "free commit %llu MB", ms.ullAvailPageFile >> 20);
+        else if (ms.ullAvailPhys < size + kPhysMargin) snprintf(why, sizeof why, "free RAM %llu MB", ms.ullAvailPhys >> 20);
+        else if (!Vram(vi)) snprintf(why, sizeof why, "video memory budget unknown");
+        else if (double(vi.CurrentUsage + size) > double(vi.Budget) * kVramStartShare)
+            snprintf(why, sizeof why, "video memory %llu of %llu MB in use", vi.CurrentUsage >> 20, vi.Budget >> 20);
+        else if (double(g_twinBytes + size) > double(vi.Budget) * kVramTwinShare)
+            snprintf(why, sizeof why, "twins would pass a quarter of the %llu MB video memory budget", vi.Budget >> 20);
+        return why;
+    }
+
     bool StartTwin(Slot* s)
     {
         if (!g_scratch)
@@ -179,9 +211,14 @@ namespace
             sd.ByteWidth = kScratchBytes; sd.Usage = D3D11_USAGE_DYNAMIC; sd.BindFlags = D3D11_BIND_VERTEX_BUFFER; sd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
             if (FAILED(g_oCreateBuffer(g_dev, &sd, nullptr, &g_scratch))) { g_scratch = nullptr; ++g_failed; return false; }
         }
-        MEMORYSTATUSEX ms = {}; ms.dwLength = sizeof ms;
-        if (GlobalMemoryStatusEx(&ms) && ms.ullAvailPageFile >= s->size + kCommitMargin)
-            s->mem = static_cast<uint8_t*>(VirtualAlloc(nullptr, s->size, MEM_RESERVE | MEM_COMMIT | MEM_WRITE_WATCH, PAGE_READWRITE));
+        const std::string why = NoRoom(s->size);
+        if (!why.empty())
+        {
+            ++g_failed;
+            rp::Log("dynbuf: no twin for the %u MB buffer %p (%s), it stays Radiant's own", s->size >> 20, static_cast<void*>(s->dyn), why.c_str());
+            return false;
+        }
+        s->mem = static_cast<uint8_t*>(VirtualAlloc(nullptr, s->size, MEM_RESERVE | MEM_COMMIT | MEM_WRITE_WATCH, PAGE_READWRITE));
         if (s->mem)
         {
             D3D11_BUFFER_DESC bd = {};
@@ -192,7 +229,7 @@ namespace
         {
             if (s->mem) { VirtualFree(s->mem, 0, MEM_RELEASE); s->mem = nullptr; }
             ++g_failed;
-            rp::Log("dynbuf: no twin for the %u MB buffer %p (memory is short), it stays Radiant's own", s->size >> 20, static_cast<void*>(s->dyn));
+            rp::Log("dynbuf: no twin for the %u MB buffer %p (allocation failed), it stays Radiant's own", s->size >> 20, static_cast<void*>(s->dyn));
             return false;
         }
         if (!s->fresh && !Seed(s))
@@ -203,6 +240,7 @@ namespace
             return false;
         }
         ++g_twins;
+        g_twinBytes += s->size;
         Rebind(s->dyn, s->twin);
         rp::Log("dynbuf: %u MB %s buffer %p drawn from a twin", s->size >> 20, s->bind == D3D11_BIND_VERTEX_BUFFER ? "vertex" : "index", static_cast<void*>(s->dyn));
         return true;
@@ -380,11 +418,43 @@ namespace
         Rebind(s->twin, s->dyn);
     }
 
+    // Radiant's own buffer takes over again
+    void DropTwin(Slot* s)
+    {
+        Restore(s);
+        s->twin->Release(); s->twin = nullptr; --g_twins; g_twinBytes -= s->size;
+        VirtualFree(s->mem, 0, MEM_RELEASE); s->mem = nullptr;
+        s->fresh = false; s->mapped = false;
+    }
+
+    // Gives every twin back when video memory or RAM runs short later, textures keep loading after the first twins
+    void Watch()
+    {
+        const uint64_t now = GetTickCount64();
+        if (now - g_lastWatch < kWatchMs) return;
+        g_lastWatch = now;
+        char why[160] = {};
+        MEMORYSTATUSEX ms = {}; ms.dwLength = sizeof ms;
+        DXGI_QUERY_VIDEO_MEMORY_INFO vi = {};
+        if (Vram(vi) && double(vi.CurrentUsage) > double(vi.Budget) * kVramDropShare)
+            snprintf(why, sizeof why, "video memory %llu of %llu MB in use", vi.CurrentUsage >> 20, vi.Budget >> 20);
+        else if (GlobalMemoryStatusEx(&ms) && ms.ullAvailPhys < kPhysDrop)
+            snprintf(why, sizeof why, "free RAM %llu MB", ms.ullAvailPhys >> 20);
+        if (!why[0]) return;
+        const uint64_t bytes = g_twinBytes;
+        for (int i = 0; i < g_used; ++i)
+            if (g_slots[i].dyn && g_slots[i].twin && !g_slots[i].mapped) { DropTwin(&g_slots[i]); g_slots[i].gaveUp = true; }
+        rp::Log("dynbuf: %s, %llu MB of twins given back, Radiant draws its own buffers", why, (unsigned long long)((bytes - g_twinBytes) >> 20));
+    }
+
     std::string Status()
     {
         char buf[600];
-        int n = snprintf(buf, sizeof buf, "dynamic_buffers=%d hooked=%d twins=%d maps=%llu uploads=%llu (%.1f MB) failed=%llu strays=%llu work=%.0f ms",
-                         g_enabled ? 1 : 0, g_hooked ? 1 : 0, g_twins, (unsigned long long)g_maps, (unsigned long long)g_uploads, double(g_uploadBytes) / 1048576.0, (unsigned long long)g_failed, (unsigned long long)g_strays, g_workMs);
+        DXGI_QUERY_VIDEO_MEMORY_INFO vi = {};
+        const bool vram = Vram(vi);
+        int n = snprintf(buf, sizeof buf, "dynamic_buffers=%d hooked=%d twins=%d (%llu MB) vram=%llu/%llu MB maps=%llu uploads=%llu (%.1f MB) failed=%llu strays=%llu work=%.0f ms",
+                         g_enabled ? 1 : 0, g_hooked ? 1 : 0, g_twins, (unsigned long long)(g_twinBytes >> 20),
+                         (unsigned long long)(vram ? vi.CurrentUsage >> 20 : 0), (unsigned long long)(vram ? vi.Budget >> 20 : 0), (unsigned long long)g_maps, (unsigned long long)g_uploads, double(g_uploadBytes) / 1048576.0, (unsigned long long)g_failed, (unsigned long long)g_strays, g_workMs);
         for (int i = 0; i < g_used && n > 0 && n < int(sizeof buf) - 64; ++i)
             if (g_slots[i].dyn)
                 n += snprintf(buf + n, sizeof buf - n, "; %u MB %s %s, written to %u MB", g_slots[i].size >> 20, g_slots[i].bind == D3D11_BIND_VERTEX_BUFFER ? "vertex" : "index",
@@ -400,14 +470,41 @@ void Setup()
     g_ctxGlobal = static_cast<ID3D11DeviceContext**>(rp::host->RadiantAddress(rp::self, kDxContext));
 }
 
+// Logs the adapter and memory so problem reports show the machine
+void FindAdapter()
+{
+    IDXGIDevice* dd = nullptr;
+    if (FAILED(g_dev->QueryInterface(__uuidof(IDXGIDevice), reinterpret_cast<void**>(&dd))) || !dd) return;
+    IDXGIAdapter* a = nullptr;
+    if (SUCCEEDED(dd->GetAdapter(&a)) && a)
+    {
+        DXGI_ADAPTER_DESC ad = {};
+        a->GetDesc(&ad);
+        if (FAILED(a->QueryInterface(__uuidof(IDXGIAdapter3), reinterpret_cast<void**>(&g_adapter)))) g_adapter = nullptr;
+        char name[128] = {};
+        WideCharToMultiByte(CP_UTF8, 0, ad.Description, -1, name, sizeof name - 1, nullptr, nullptr);
+        DXGI_QUERY_VIDEO_MEMORY_INFO vi = {};
+        MEMORYSTATUSEX ms = {}; ms.dwLength = sizeof ms;
+        GlobalMemoryStatusEx(&ms);
+        Vram(vi);
+        rp::Log("dynbuf: GPU '%s', dedicated %llu MB, budget %llu MB, %llu MB in use; RAM %llu MB, %llu MB free, commit %llu MB free",
+                name, (unsigned long long)(ad.DedicatedVideoMemory >> 20), (unsigned long long)(vi.Budget >> 20), (unsigned long long)(vi.CurrentUsage >> 20),
+                (unsigned long long)(ms.ullTotalPhys >> 20), (unsigned long long)(ms.ullAvailPhys >> 20), (unsigned long long)(ms.ullAvailPageFile >> 20));
+        a->Release();
+    }
+    dd->Release();
+}
+
 void Tick()
 {
-    if (g_tried || !g_enabled || !g_ctxGlobal || !*g_ctxGlobal) return;
+    if (g_tried) { if (g_twins) Watch(); return; }
+    if (!g_enabled || !g_ctxGlobal || !*g_ctxGlobal) return;
     g_tried = true;
     if (!NativeD3D11()) { rp::Log("dynbuf: not Direct3D 11's own runtime, nothing to do"); return; }
     g_ctx = *g_ctxGlobal;
     g_ctx->GetDevice(&g_dev);
     if (!g_dev) return;
+    FindAdapter();
     void** cvt = *reinterpret_cast<void***>(g_ctx);
     void** dvt = *reinterpret_cast<void***>(g_dev);
     g_hooked = rp::host->Detour(rp::self, cvt[14], reinterpret_cast<void*>(&hk_Map), reinterpret_cast<void**>(&g_oMap))
@@ -434,6 +531,7 @@ void Shutdown()
     }
     g_used = 0;
     if (g_scratch) { g_scratch->Release(); g_scratch = nullptr; }
+    if (g_adapter) { g_adapter->Release(); g_adapter = nullptr; }
     if (g_dev) { g_dev->Release(); g_dev = nullptr; }
 }
 
@@ -444,17 +542,14 @@ bool Command(const std::string& c, std::string& reply)
     {
         g_enabled = c.back() == '1';
         rp::ConfigSet("performance", "dynamic_buffers", g_enabled ? "1" : "0");
-        if (g_enabled) g_tried = g_hooked;
+        if (g_enabled)
+        {
+            g_tried = g_hooked;
+            for (int i = 0; i < kSlots; ++i) g_slots[i].gaveUp = false;
+        }
         else if (g_hooked)
             for (int i = 0; i < kSlots; ++i)
-                if (g_slots[i].dyn && g_slots[i].twin)
-                {
-                    Slot* s = &g_slots[i];
-                    Restore(s);
-                    s->twin->Release(); s->twin = nullptr; --g_twins;
-                    VirtualFree(s->mem, 0, MEM_RELEASE); s->mem = nullptr;
-                    s->fresh = false; s->mapped = false;
-                }
+                if (g_slots[i].dyn && g_slots[i].twin) DropTwin(&g_slots[i]);
     }
     else if (c != "dynbuf" && c != "dynbuf status") { reply = "dynbuf [0|1|status]"; return true; }
     reply = Status();

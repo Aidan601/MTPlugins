@@ -215,6 +215,7 @@ namespace
     AssertFn    g_origAssert = nullptr;
     bool        g_assertHooked = false;
     int         g_assertMode = ASSERT_ASK;
+    int         g_quietAsserts = 0;      // open QuietAsserts scopes
     std::atomic<long> g_asserts{0};
     volatile LONG g_inAssertBox = 0;
     void**      g_timerPtr = nullptr;
@@ -269,6 +270,7 @@ namespace
                     "Find the brush with over 64 planes in the .map and split it.");
             return g_origAssert(file, line, kind, expr, "%s", msg);
         }
+        if (g_quietAsserts > 0) return 1;                                         // the FX window's own effects: logged, no box
         if (g_assertMode == ASSERT_RADIANT) return g_origAssert(file, line, kind, expr, "%s", msg);
         if (g_assertMode == ASSERT_CONTINUE) return 1;
         if (InterlockedCompareExchange(&g_inAssertBox, 1, 0) != 0) return 1;      // an assert while the box is up: continue
@@ -733,6 +735,9 @@ void AfterMapLoad()
 {
     if (g_enabled && g_wantLoadFlags) ResetLoadFlags();
 }
+
+void QuietAsserts(bool on) { g_quietAsserts += on ? 1 : -1; if (g_quietAsserts < 0) g_quietAsserts = 0; }
+long AssertCount() { return g_asserts.load(); }
 
 bool Command(const std::string& command, std::string& reply)
 {

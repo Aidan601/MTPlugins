@@ -63,6 +63,8 @@ The most useful ones with how to use them. Every function and global MTPlugins k
 | `Entity_AddToList` | `0x140CA5690` | `(list sentinel, entity_t*)` | |
 | `Brush_Parse` | `0x1401E3FE0` | `(parseSession, int, char)` | |
 | `Brush_Build` | `0x1401DEB00` | `(brush_t*, bool snap, bool markModified, uint flags)` | rebuilds windings and bounds |
+| `Patch_Resize` | `0x14078E1D0` | `void (patch, int rows, int cols)` | the control array may move (read its pointer again), remaps the vertex selection by index |
+| `Patch_RebuildMesh` | `0x1407A49C0` | `__int64 (patch)` | re-tessellates the render mesh from the control net |
 | `Brush_Move` | `0x1401E1540` | `(brush_t*, const float delta[3], uchar snap, uchar markModified)` | also moves a fixed-size entity's origin |
 | `Select_Move` | `0x140D02700` | `(const float delta[3], bool snap)` | `Brush_Move` on every selected brush |
 | `Select_Brush` | `0x140B01DB0` | `(BrushCollection*, BrushInst*)` | takes a `BrushInst`, never a `brush_t` (crashes) |
@@ -126,6 +128,7 @@ The most useful ones with how to use them. Every function and global MTPlugins k
 | +32 / +36 | `int` | undo id / redo id |
 | +48 | `GUID` | brush GUID |
 | +64 / +76 | `float[3]` | mins / maxs |
+| +88 / +100 | `float[3]` | padded mins / maxs, what the renderer culls with |
 | +96 | flags | bit `0x80` = selected |
 | +144 / +152 / +160 | `face_t*` | `std::vector<face_t>` begin / end / capacity |
 | +168 | `std::string` | layer name |
@@ -149,6 +152,7 @@ The selection is a list of `BrushInst` nodes, not of `brush_t`.
 | +24 / +32 | links in the owner's instance list |
 | +48 | the `brush_t*` |
 | +96 | flags (`0x80` = selected) |
+| +480 / +492 | cull mins / maxs `float[3]`, copied from the brush's padded bounds |
 
 - `BrushCollection` (96 bytes): `+56` points at the list sentinel; first node `*(sentinel + 8)`, next `*(node + 8)`,
   stop at the sentinel.
@@ -192,6 +196,10 @@ The selection is a list of `BrushInst` nodes, not of `brush_t`.
 - `PatchGrid`: rows are the blocks in the `.map` text, columns are the points per block.
 - `PatchSelectVerts` returns the count, -1 for a bad argument or over 1024, -2 for not a selected patch, -3 for a row or column out of range.
 - `PatchWeldVerts` returns the vertices moved, 0 when none are selected, -1 when no patch is selected or the selection is stale.
+- Patch data (`brush+224`): `+660` int rows, `+664` int cols, `+672` pointer to the control records, index `row * cols + col`.
+- A control record is 92 bytes: `+0` xyz `float[3]`, `+12` UVs `float[6]`, `+48` vertex color `float[4]`.
+- After writing control points: `Brush_Build(brush, 0, 1, 0)`, `Patch_RebuildMesh(patch)`, then the `BrushInst` cull bounds.
+- The patch vertex selection points into the control records: clear it before a resize.
 
 ### Loading and saving
 

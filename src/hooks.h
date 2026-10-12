@@ -66,6 +66,7 @@ namespace hooks
     // Reload the map file without prompting
     bool        ReloadMapNow(const std::wstring& fullPath, bool keepCamera);
     bool        IsReloading();
+    bool        InMapLoad();        // main thread: Map_LoadFile is running (a modal box would land mid-load)
     bool MouseButtonHeld();          // any mouse button down (a reload must wait: freelook hides the cursor)
 
     // ---- in-place editing through Radiant's own paste/delete pipeline (MAIN THREAD ONLY) --
@@ -106,6 +107,8 @@ namespace hooks
     // count (may exceed capFaces). SetBrushPlanes writes them back (same count) and rebuilds the brush like Brush_Move (no undo).
     size_t      BrushPlanes(RadPtr brush, float* out, size_t capFaces);
     bool        SetBrushPlanes(RadPtr brush, const float* pts, size_t nFaces);
+    // A translation or classic-brush plane set as one undoable edit that marks the map modified
+    bool        CommitBrushGeometry(RadPtr brush, const float* pts, size_t nFaces, const float delta[3], const char* undoLabel);
     bool        EntityFixedSize(RadPtr ent);              // eclass fixed-size flag: point entities, models, prefabs (the one brush is never written)
     RadPtr      BrushOfInst(RadPtr inst);                 // BrushInst -> brush_t
     // The writer skips unlinked (selected) brushes: this links `extraBrushes` for one Entity_Write call, then restores them.
@@ -125,6 +128,7 @@ namespace hooks
     // ---- patch vertices (MAIN THREAD ONLY, contract: ModToolsHostApi::PatchGrid) ----
     RadPtr PatchBrushByGuid(const std::string& guid, bool selectedOnly);   // selected list first, then the entity lists
     int  PatchGrid(RadPtr brush, int* rows, int* cols, float* xyz, int cap);   // rows*cols, 0 = not a patch
+    bool PatchSetGrid(RadPtr brush, int rows, int cols, const float* xyz, int count);   // replace control points, resize if needed
     int  PatchSelectVerts(const std::vector<std::pair<RadPtr, int>>& refs);  // (brush, index), empty clears
     int  PatchSelectedVertCount();
     int  PatchWeldSelected(const float xyz[3]);

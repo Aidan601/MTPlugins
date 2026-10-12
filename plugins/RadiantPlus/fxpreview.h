@@ -15,6 +15,11 @@ void Shutdown();
 bool Command(const std::string& command, std::string& reply);
 // True while a preview hides the map: Cam_ProcessAllBrushes is skipped for that frame.
 bool HidingMap();
-// fxswap reports a settled click on an effect in the FX Browser ("/dir/name").
-void OnBrowserClick(const std::string& name);
+// True during the same frames: the brush collection walks (entity helpers, the selection) are skipped too.
+bool HidingMapHelpers();
+// Enter/Leave Prefab: the levels above keep their fx list for "All In Use Top". Plugin OnBeforeScopeChange, OnScopeChanged.
+void BeforeScopeChange();
+void ScopeChanged(int depth);
+// A map was loaded: the level lists are dropped. Plugin OnMapLoaded.
+void MapLoaded();
 }

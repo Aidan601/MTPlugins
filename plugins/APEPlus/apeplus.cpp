@@ -42,7 +42,10 @@
 //                               (FillList, OnListRow, ShowPicker), menu (BindFns, ResolveIds, DecorateMenu, OnSlot via
 //                               preview::g_slotHook), Tick, Install, Uninstall, Status
 //   namespace convert ......... Feature 5, first-time model conversion: hk_BuildSurfaces (face indices bucketed per material x LOD,
-//                               Ctx t_ctx), hk_BuildOne (the face vector pointed at one bucket's copy for the call), Install, Status
+//                               Ctx t_ctx), hk_BuildOne (the face vector pointed at one bucket's copy for the call), Install, Status,
+//                               "convert lods [click <n>]" (test: the Number of LODs buttons), the vertex cache reorder in vcache.cpp
+//   namespace autolod ......... an Output note when a preview auto LOD is past the stock linker's limits: hk_Reduce (g_told), Install;
+//                               meshoptimizer preview LODs while Launcher+ uses them: Meshopt, Key, hk_Cache*, InstallMeshopt
 //   namespace formats ......... Feature 6, extra image source formats (JPEG): hk_EndsWith (the converter's ".png" test, caller
 //                               checked), hk_QsEq (the texture widget's "png" compare), PatchPicker (filter string in .rdata),
 //                               Configure ([images] extra_formats), Install, Uninstall, Status
@@ -67,7 +70,14 @@
 #include "themeicons.h"
 #include "themeeditor.h"
 #include "actionlog.h"
+#include "colorpicker.h"
+#include "filesearch.h"
+#include "notesounds.h"
+#include "previewfix.h"
+#include "weaponpreview.h"
 #include "discordrpc.h"
+#include "meshlod.h"
+#include "vcache.h"
 #include <windows.h>
 #include <dbghelp.h>
 #include <mmsystem.h>
@@ -1204,6 +1214,7 @@ namespace
         }
         void BuildCache(void* tree)
         {
+            LoadTypeNames();   // AddNodes bounds the type index by the name count
             uint64_t t0 = Now();
             Cache c; c.tree = tree;
             int tl = qt.topLevelItemCount(tree);
@@ -1265,7 +1276,7 @@ namespace
             std::vector<uint8_t> typePass(g_typeNames.size() + 64, 1);
             if (!typeE.groups.empty()) for (size_t i = 0; i < typePass.size(); ++i) typePass[i] = i < g_typeNames.size() && ExprMatch(typeE, g_typeNames[i], g_typeNames[i]) ? 1 : 0;
             bool anyNameOrFav = !nameE.groups.empty() || favOnly, anyType = !typeE.groups.empty();
-            bool filtersActive = anyNameOrFav || anyType || valueOn || !gdtE.groups.empty();
+            bool assetFilters = anyNameOrFav || anyType || valueOn;
             double valueMs = 0;
 
             std::vector<uint8_t> vis(c.nodes.size(), 1);
@@ -1308,7 +1319,7 @@ namespace
                             if (*flag != hide) { *flag = hide; qt.itemSetHidden(c.nodes[k].item, hide != 0); ++changes; }
                         }
                 }
-                bool hideGdt = !gpass || (!any && (g.count > 0 || filtersActive));   // APE: with no filter at all every GDT row shows, even an empty one
+                bool hideGdt = !gpass || (!any && (g.count > 0 || assetFilters));   // an empty GDT row shows unless an asset filter is on, so the GDT filter finds it
                 if (g.hidden != hideGdt) { g.hidden = hideGdt; qt.itemSetHidden(g.item, hideGdt); ++changes; }
                 if (hideGdt) ++gdtHidden;
             }
@@ -1672,7 +1683,11 @@ namespace
             const uint64_t now = Now();
             if (g_last) { const double d = Ms(now - g_last); if (d < 500.0) g_avgMs = g_avgMs > 0 ? g_avgMs * 0.95 + d * 0.05 : d; }
             g_last = now; ++g_frames;
+            ba::previewfix::BeforeFrame(widget);
+            ba::weaponpreview::BeforeFrame();
             g_orig(widget, a2);
+            ba::previewfix::AfterFrame();   // first: it puts back the attached gun's anim, the weapon preview reads its tags
+            ba::weaponpreview::AfterFrame();
         }
         // every QTimer::singleShot in the process passes here, only the frame function's re-queue is changed
         void __fastcall hk_SingleShot(int msec, const void* receiver, const char* member)
@@ -2267,6 +2282,127 @@ namespace
                      g_hooked ? 1 : 0, g_on ? 1 : 0, (unsigned long long)g_models.load(), (unsigned long long)g_calls.load(), (unsigned long long)g_moved.load(),
                      g_maxUs / 1000.0, g_totalUs / 1000.0);
             return buf;
+        }
+    }
+
+    // ---- autolod: an Output note when a preview auto LOD is past the stock linker's limits ----
+    namespace autolod
+    {
+        const uintptr_t kReduce = 0x14067C300;   // (out, model**, lodSpec*, ?, error string*): one auto LOD
+        const uintptr_t kPrint = 0x14002A0D6;    // PrintOutput(channel, format, ...), a jmp thunk
+        const uintptr_t kSimplify = 0x140217930; // tfbDecimate simplifier, the linker's 0x7AE170
+        const uintptr_t kCacheName = 0x14067D440, kCacheRead = 0x14067D4B0, kCacheWrite = 0x14067DBF0;   // "ToolsGfx/xmeshes/v39/<mesh>/pct%d_<key>"
+        const uint8_t kSimplifyPrologue[] = { 0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57, 0x48, 0x83, 0xEC, 0x40 };
+        const size_t kStockFaces = 220000, kStockBones = 1000;
+        using ReduceFn = void* (__fastcall*)(void*, uint8_t**, float*, void*, void*);
+        using PrintFn = void (*)(int, const char*, ...);   // APE's msvcr110 printf: no %zu
+        ReduceFn g_orig = nullptr;
+        PrintFn g_print = nullptr;
+        std::mutex g_lock;
+        std::unordered_set<uint64_t> g_told;   // faces << 20 | bones, one note per model
+        using CacheNameFn = int (__fastcall*)(char*, size_t, const void*, int, const uint32_t*);
+        using CacheReadFn = uint64_t (__fastcall*)(void*, const void*, int, const uint32_t*);
+        using CacheWriteFn = void (__fastcall*)(const void*, int, const uint32_t*, void*);
+        CacheNameFn g_name = nullptr;
+        CacheReadFn g_read = nullptr;
+        CacheWriteFn g_write = nullptr;
+        std::wstring g_launcherIni;
+        bool g_active = false;   // every detour live: keys and reduction switch together
+
+        // the linker reduces with meshoptimizer: same keys BuildPlusLinker and the launcher bridge read
+        bool Meshopt()
+        {
+            const wchar_t* ini = g_launcherIni.c_str();
+            return g_active && GetPrivateProfileIntW(L"launcherplus", L"enabled", 1, ini) && GetPrivateProfileIntW(L"linker", L"enabled", 1, ini) &&
+                   GetPrivateProfileIntW(L"linker", L"patches", 1, ini) && GetPrivateProfileIntW(L"linker", L"meshopt_autolod", 1, ini);
+        }
+
+        // meshoptimizer LODs get their own cache files, so switching never shows the other simplifier's
+        struct Key
+        {
+            uint32_t k[4];
+            const uint32_t* For(int pct, const uint32_t* key)
+            {
+                if (pct >= 100 || !key || !Meshopt()) return key;
+                memcpy(k, key, sizeof k);
+                k[3] ^= meshlod::kCacheTag;
+                return k;
+            }
+        };
+        int __fastcall hk_CacheName(char* dest, size_t size, const void* mesh, int pct, const uint32_t* key) { Key k; return g_name(dest, size, mesh, pct, k.For(pct, key)); }
+        uint64_t __fastcall hk_CacheRead(void* reader, const void* mesh, int pct, const uint32_t* key) { Key k; return g_read(reader, mesh, pct, k.For(pct, key)); }
+        void __fastcall hk_CacheWrite(const void* mesh, int pct, const uint32_t* key, void* writer) { Key k; g_write(mesh, pct, k.For(pct, key), writer); }
+
+        // model +8 bones (192 bytes each), +56 faces (116 bytes each) as std::vector begin/end pairs, called on worker threads
+        void* __fastcall hk_Reduce(void* out, uint8_t** model, float* spec, void* a4, void* err)
+        {
+            const uint8_t* m = model ? *model : nullptr;
+            if (m && g_print)
+            {
+                const auto span = [m](size_t at, size_t size) { return (*reinterpret_cast<const uintptr_t*>(m + at + 8) - *reinterpret_cast<const uintptr_t*>(m + at)) / size; };
+                const size_t faces = span(56, 116), bones = span(8, 192);
+                bool tell = false;
+                if (faces > kStockFaces || bones > kStockBones)
+                {
+                    std::lock_guard<std::mutex> lock(g_lock);
+                    tell = g_told.insert(uint64_t(faces) << 20 | bones).second;
+                }
+                if (tell && bones > kStockBones)
+                    g_print(0, "APEPlus: this model has %u bones. The linker refuses auto LODs over %u bones (\"Model is too complex for auto LOD\"), give it LOD files instead.\n", unsigned(bones), unsigned(kStockBones));
+                else if (tell)
+                    g_print(0, "APEPlus: this model has %u faces. The stock linker refuses auto LODs over 220,000 faces (\"Model is too complex for auto LOD\"). "
+                               "Launcher+ builds them (LauncherPlus.ini [linker] raise_autolod_limit).\n", unsigned(faces));
+            }
+            struct Simplifier
+            {
+                explicit Simplifier(int stride) { meshlod::t_stride = stride; }
+                ~Simplifier() { meshlod::t_stride = 0; meshlod::t_attributes = {}; }
+            } simplifier(m && Meshopt() ? int((*reinterpret_cast<const uintptr_t*>(m + 16) - *reinterpret_cast<const uintptr_t*>(m + 8)) / 192) + 11 : 0);
+            return g_orig(out, model, spec, a4, err);
+        }
+
+        bool IsFunction(void* at)
+        {
+            DWORD64 base = 0;
+            PRUNTIME_FUNCTION fn = at ? RtlLookupFunctionEntry(DWORD64(at), &base, nullptr) : nullptr;
+            return fn && DWORD64(fn->BeginAddress) + base == DWORD64(at);
+        }
+
+        // preview auto LODs from meshoptimizer while Launcher+ links with it.
+        void InstallMeshopt()
+        {
+            void* simplify = rp::Ape()->ApeAddress(rp::self, kSimplify);
+            void* name = rp::Ape()->ApeAddress(rp::self, kCacheName);
+            void* read = rp::Ape()->ApeAddress(rp::self, kCacheRead);
+            void* write = rp::Ape()->ApeAddress(rp::self, kCacheWrite);
+            if (!IsFunction(simplify) || memcmp(simplify, kSimplifyPrologue, sizeof kSimplifyPrologue) || !IsFunction(name) || !IsFunction(read) || !IsFunction(write))
+            {
+                rp::Log("autolod: simplifier or cache names not found, preview LODs stay stock");
+                return;
+            }
+            g_launcherIni = rp::PluginDir();
+            g_launcherIni = g_launcherIni.substr(0, g_launcherIni.find_last_of(L"\\/")) + L"\\LauncherPlus\\LauncherPlus.ini";
+            const bool ok = rp::host->Detour(rp::self, simplify, reinterpret_cast<void*>(&meshlod::HookSimplify), reinterpret_cast<void**>(&meshlod::g_simplify)) &&
+                            rp::host->Detour(rp::self, name, reinterpret_cast<void*>(&hk_CacheName), reinterpret_cast<void**>(&g_name)) &&
+                            rp::host->Detour(rp::self, write, reinterpret_cast<void*>(&hk_CacheWrite), reinterpret_cast<void**>(&g_write)) &&
+                            rp::host->Detour(rp::self, read, reinterpret_cast<void*>(&hk_CacheRead), reinterpret_cast<void**>(&g_read));
+            if (!ok) { rp::Log("autolod: meshopt detours failed, preview LODs stay stock"); return; }
+            g_active = true;
+            rp::Log("autolod: meshopt preview LODs installed (%s now)", Meshopt() ? "on" : "off");
+        }
+
+        void Install()
+        {
+            if (g_orig || !rp::Ape()) return;
+            void* target = rp::Ape()->ApeAddress(rp::self, kReduce);
+            const uint8_t* print = static_cast<const uint8_t*>(rp::Ape()->ApeAddress(rp::self, kPrint));
+            DWORD64 base = 0;
+            PRUNTIME_FUNCTION fn = target ? RtlLookupFunctionEntry(DWORD64(target), &base, nullptr) : nullptr;
+            if (!fn || DWORD64(fn->BeginAddress) + base != DWORD64(target) || !print || print[0] != 0xE9) { rp::Log("autolod: APE's auto LOD code not found, no note"); return; }
+            g_print = reinterpret_cast<PrintFn>(const_cast<uint8_t*>(print));
+            if (!rp::host->Detour(rp::self, target, reinterpret_cast<void*>(&hk_Reduce), reinterpret_cast<void**>(&g_orig))) { rp::Log("autolod: detour failed"); g_print = nullptr; return; }
+            rp::Log("autolod: installed");
+            InstallMeshopt();
         }
     }
 
@@ -3932,6 +4068,7 @@ namespace
         filt::g_fastValue = rp::ConfigGetBool("filter", "fast_value", true);
         if (filt::g_debounceMs < 0) filt::g_debounceMs = 0; if (filt::g_debounceMs > 2000) filt::g_debounceMs = 2000;
         rp::Log("loaded; qt exports %s", qt.bound ? "bound" : "MISSING");
+        ba::filesearch::Install();
         filt::Install();
         commit::g_minS = rp::ConfigGetInt("commit", "scan_min_s", 10); if (commit::g_minS < 0) commit::g_minS = 0; if (commit::g_minS > 3600) commit::g_minS = 3600;
         commit::Install();
@@ -3945,6 +4082,8 @@ namespace
         sky::Install();
         convert::g_on = rp::ConfigGetBool("preview", "fast_convert", true);
         convert::Install();
+        ba::vcache::Install();
+        autolod::Install();
         formats::Configure(rp::ConfigGet("images", "extra_formats", "jpg,jpeg"));
         formats::Install();
         fastopen::g_on = rp::ConfigGetBool("open", "lazy_popups", true);
@@ -3954,6 +4093,10 @@ namespace
         fastopen::Install();
         awi::Install(rp::ConfigGetBool("deffiles", "override", true));
         ba::actionlog::Setup();
+        ba::colorpicker::Install();
+        ba::notesounds::Install();
+        ba::previewfix::Install();
+        ba::weaponpreview::Install();
         discordrpc::Setup("ape", "APE (Asset Property Editor)");
         return 1;
     }
@@ -3962,6 +4105,10 @@ namespace
     {
         discordrpc::Shutdown();
         ba::actionlog::Shutdown();
+        ba::colorpicker::Shutdown();
+        ba::notesounds::Shutdown();
+        ba::previewfix::Shutdown();
+        ba::weaponpreview::Shutdown();
         themeicons::Shutdown();
         awi::Uninstall();
         sky::Uninstall();
@@ -3983,6 +4130,9 @@ namespace
         iotrace::Tick();
         fastopen::Tick();
         ba::actionlog::Tick();
+        ba::filesearch::Tick();
+        ba::notesounds::Tick();
+        ba::weaponpreview::Tick();
         if (discordrpc::Due()) discordrpc::Update(DiscordActivity());
         uint64_t now = Now();
         if (g_tickPrev) { uint64_t gap = now - g_tickPrev; if (gap > g_tickMaxGap) { g_tickMaxGap = gap; g_tickMaxAt = now; } }
@@ -4018,6 +4168,12 @@ namespace
         std::string c = cmd;
         char buf[512];
         if (ba::actionlog::Command(c, reply)) return reply.c_str();
+        if (ba::colorpicker::Command(c, reply)) return reply.c_str();
+        if (ba::filesearch::Command(c, reply)) return reply.c_str();
+        if (ba::vcache::Command(c, reply)) return reply.c_str();
+        if (ba::notesounds::Command(c, reply)) return reply.c_str();
+        if (ba::previewfix::Command(c, reply)) return reply.c_str();
+        if (ba::weaponpreview::Command(c, reply)) return reply.c_str();
         if (discordrpc::Command(c, reply)) return reply.c_str();
         if (c == "edits" || c == "edits all")
         {
@@ -4065,6 +4221,12 @@ namespace
             filt::g_fastValue = c.back() == '1'; rp::ConfigSet("filter", "fast_value", filt::g_fastValue ? "1" : "0");
             reply = filt::g_fastValue ? "value filter: the plugin's engine" : "value filter: APE's own engine"; return reply.c_str();
         }
+        if (c == "filter name 0" || c == "filter name 1")   // test harness: the Name filter's check box
+        {
+            if (!filt::FindUi() || !filt::g_ui.nameCb) { reply = "no Name check box"; return reply.c_str(); }
+            qt.buttonSetChecked(filt::g_ui.nameCb, c.back() == '1');
+            reply = c.back() == '1' ? "Name filter checked" : "Name filter unchecked"; return reply.c_str();
+        }
         if (c.rfind("filter debounce ", 0) == 0)
         {
             filt::g_debounceMs = atoi(c.substr(16).c_str()); if (filt::g_debounceMs < 0) filt::g_debounceMs = 0; if (filt::g_debounceMs > 2000) filt::g_debounceMs = 2000;
@@ -4088,9 +4250,12 @@ namespace
             void* tree = FindTree();
             if (!tree || !qt.treeSetCurrentItem) { reply = "no tree"; return reply.c_str(); }
             if (!filt::CacheValid(tree)) filt::BuildCache(tree);
-            std::string want = c.substr(7); std::wstring w(want.begin(), want.end()); w = filt::Lower(w.c_str(), w.size());
+            std::string want = c.substr(7);
+            int skip = 0;   // "name#2" picks the second item with that name (an xmodel and a weapon can share one)
+            if (size_t h = want.rfind('#'); h != std::string::npos) { skip = std::max(0, atoi(want.c_str() + h + 1) - 1); want.resize(h); }
+            std::wstring w(want.begin(), want.end()); w = filt::Lower(w.c_str(), w.size());
             for (const filt::Node& n : filt::g_cache.nodes)
-                if (n.lowered == w)
+                if (n.lowered == w && skip-- == 0)
                 {
                     uint64_t t0 = Now();
                     qt.treeSetCurrentItem(tree, n.item);
@@ -4142,6 +4307,32 @@ namespace
         if (c == "awi" || c.rfind("awi ", 0) == 0) { reply = awi::Command(c.size() > 4 ? c.substr(4) : ""); return reply.c_str(); }
         if (c.rfind("iotrace ", 0) == 0) { reply = iotrace::Start(atoi(c.substr(8).c_str())); return reply.c_str(); }
         if (c == "convert") { reply = convert::Status(); return reply.c_str(); }
+        if (c == "convert lods" || c.rfind("convert lods click ", 0) == 0)
+        {
+            // test only: the Number of LODs buttons of the open xmodel, "click <n>" queues a click (XModel Info opens a modal box)
+            void* grid = CurrentGrid();
+            void* group = grid ? rp::host->ui->FindChild(grid, "apeButtonGroupWidget", 0) : nullptr;
+            if (!group) { reply = "no Number of LODs group (open an xmodel)"; return reply.c_str(); }
+            reply.clear();
+            const int want = c.size() > 19 ? atoi(c.c_str() + 19) : -1;
+            // A click queued while a modal box is open runs after the commands sent meanwhile swapped the grid's asset, and
+            // APE's own handler then faults on the stale pointer.
+            if (want >= 0)
+            {
+                using ModalFn = void* (__fastcall*)();
+                auto activeModal = reinterpret_cast<ModalFn>(GetProcAddress(GetModuleHandleW(L"Qt5Widgets64r.dll"), "?activeModalWidget@QApplication@@SAPEAVQWidget@@XZ"));
+                if (activeModal && activeModal()) { reply = "a modal window is open (close it first)"; return reply.c_str(); }
+            }
+            for (int i = 0; i < 32; ++i)
+            {
+                void* b = rp::host->ui->FindChild(group, "QAbstractButton", i);
+                if (!b) break;
+                if (i == want && qt.timerSingleShot) { qt.timerSingleShot(0, b, "1click()"); reply = "click queued on button " + std::to_string(i); return reply.c_str(); }
+                reply += std::to_string(i) + ": '" + TakeString(qt.buttonText, b) + "' tip '" + TakeString(qt.toolTip, b) + "'\n";
+            }
+            if (reply.empty()) reply = "no buttons";
+            return reply.c_str();
+        }
         if (c == "convert 0" || c == "convert 1") { convert::g_on = c[8] == '1'; convert::g_models = 0; convert::g_totalUs = 0; convert::g_maxUs = 0; reply = convert::Status(); return reply.c_str(); }
         if (c == "formats" || c == "formats status") { reply = formats::Status(); return reply.c_str(); }
         if (c == "open" || c == "open status") { reply = fastopen::Status(); return reply.c_str(); }
@@ -4242,7 +4433,7 @@ extern "C" MODTOOLS_PLUGIN_EXPORT const ModToolsPluginApi* ModToolsPluginEntry(M
     api.apiVersion = MODTOOLS_PLUGIN_API_VERSION;
     api.name = "APEPlus";
     api.displayName = "APE+";
-    api.version = "1.0.0";
+    api.version = "1.1.0";
     api.author = "Figglebottom";
     api.description = "QOL fixes and improvements to APE.";
     api.url = "https://github.com/Aidan601/MTPlugins/tree/main/plugins/APEPlus";

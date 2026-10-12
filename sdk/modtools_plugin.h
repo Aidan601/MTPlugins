@@ -500,6 +500,13 @@ typedef struct ModToolsHostApi
     /* [Radiant] MAIN THREAD (check rp::Has): move your closed pane into the tab group of Radiant's pane titled `beside` ("Camera", "Entity Info")
      * and raise it (returns 1), or raise one that is already open behind another tab (2). 0 = left alone, `beside` is missing or hidden. */
     int  (*TabPaneWith)(ModToolsPlugin* p, ModToolsPane pane, const char* beside);
+    /* [Radiant] MAIN THREAD (check rp::Has): replace a patch's control grid by GUID, resizing its control net if needed.
+     * xyz holds exactly rows*cols triples (both odd, 3 or more). No undo record: wrap it in BeginUndo/EndUndo.
+     * Returns 1 on success, 0 for a missing patch or an unsafe grid. */
+    int  (*PatchSetGrid)(ModToolsPlugin* p, const char* brushGuid, int rows, int cols, const float* xyz, int count);
+    /* [Radiant] MAIN THREAD (check rp::Has): commit a brush translation (delta) or a classic-brush plane set (pts/nFaces, wins over delta)
+     * as one undoable edit that marks the map modified, joining an open undo step. */
+    int  (*CommitBrushGeometry)(ModToolsPlugin* p, ModToolsBrush brush, const float* pts, size_t nFaces, const float delta[3], const char* undoLabel);
 } ModToolsHostApi;
 
 /* ---- [APE] Asset Property Editor services: host->ape (NULL in Radiant and the launcher), MAIN THREAD unless noted ------------- */

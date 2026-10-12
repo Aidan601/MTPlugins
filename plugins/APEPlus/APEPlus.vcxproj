@@ -55,7 +55,7 @@
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>user32.lib;dbghelp.lib;winmm.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>user32.lib;dbghelp.lib;winmm.lib;ole32.lib;mfuuid.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
       <Command>if not exist "$(SolutionDir)build\$(Configuration)\plugins\APEPlus\APEPlus.ini" copy /y "$(ProjectDir)APEPlus.ini" "$(SolutionDir)build\$(Configuration)\plugins\APEPlus\APEPlus.ini" &gt;nul
@@ -84,16 +84,36 @@ xcopy /y /i /d "$(ProjectDir)deffiles" "$(SolutionDir)build\$(Configuration)\plu
   <ItemGroup>
     <ClCompile Include="apeplus.cpp" />
     <ClCompile Include="actionlog.cpp" />
+    <ClCompile Include="colorpicker.cpp" />
+    <ClCompile Include="filesearch.cpp" />
+    <ClCompile Include="vcache.cpp" />
+    <ClCompile Include="notesounds.cpp" />
+    <ClCompile Include="previewfix.cpp" />
+    <ClCompile Include="weaponpreview.cpp" />
+    <ClCompile Include="xanimbin.cpp" />
+    <ClCompile Include="fxplayer.cpp" />
     <ClCompile Include="..\common\themeicons.cpp" />
     <ClCompile Include="..\common\themeeditor.cpp" />
     <ClCompile Include="..\common\discordrpc.cpp" />
+    <ClCompile Include="..\common\colorextras.cpp" />
+    <ClCompile Include="..\common\third_party\meshoptimizer\simplifier.cpp" />
+    <ClCompile Include="..\common\third_party\meshoptimizer\allocator.cpp" />
     <ResourceCompile Include="APEPlus.rc" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\sdk\modtools_plugin.h" />
     <ClInclude Include="..\common\themeicons.h" />
     <ClInclude Include="..\common\themeeditor.h" />
+    <ClInclude Include="..\common\colorextras.h" />
     <ClInclude Include="actionlog.h" />
+    <ClInclude Include="colorpicker.h" />
+    <ClInclude Include="filesearch.h" />
+    <ClInclude Include="vcache.h" />
+    <ClInclude Include="notesounds.h" />
+    <ClInclude Include="previewfix.h" />
+    <ClInclude Include="weaponpreview.h" />
+    <ClInclude Include="xanimbin.h" />
+    <ClInclude Include="fxplayer.h" />
     <ClInclude Include="..\..\sdk\modtools_plugin.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

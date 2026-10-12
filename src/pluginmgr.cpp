@@ -2,6 +2,7 @@
 #include <shellapi.h>
 #include <algorithm>
 #include <cstring>
+#include <initializer_list>
 #include <string>
 #include <vector>
 #include "pluginmgr.h"
@@ -33,6 +34,8 @@ namespace
     void* g_btnReload = nullptr; void* g_btnRefresh = nullptr; void* g_btnFolder = nullptr; void* g_btnSettings = nullptr; void* g_btnWebsite = nullptr;
     void* g_btnUninstall = nullptr;
     void* g_filter = nullptr;
+    void* g_search = nullptr;        // QLineEdit above the list, both views
+    std::string g_searchShown;
     void* g_pendingClick = nullptr;
     unsigned g_shownVersion = 0;
     int   g_shownRow = -1;
@@ -48,6 +51,8 @@ namespace
     bool  g_useFilter = false;
     void* g_chkUpdates = nullptr;    // "Ask about MTPlugins updates" ([update] check)
     bool  g_updatesShown = true;
+    void* g_chkPluginUpdates = nullptr;   // "Ask about plugin updates" ([update] plugins)
+    bool  g_pluginUpdatesShown = true;
 
     std::string Escape(const std::string& s)
     {
@@ -86,6 +91,37 @@ namespace
         return s;
     }
 
+    std::string Lower(std::string s)
+    {
+        for (char& c : s) if (c >= 'A' && c <= 'Z') c = char(c - 'A' + 'a');
+        return s;
+    }
+
+    // every word of the search text appears somewhere in the fields, case ignored
+    bool Matches(std::initializer_list<std::string> fields)
+    {
+        std::string hay;
+        for (const std::string& f : fields) hay += Lower(f) + '\n';
+        std::string q = Lower(g_searchShown);
+        size_t i = 0;
+        while (i < q.size())
+        {
+            size_t a = q.find_first_not_of(" \t", i);
+            if (a == std::string::npos) break;
+            size_t b = q.find_first_of(" \t", a);
+            if (b == std::string::npos) b = q.size();
+            if (hay.find(q.substr(a, b - a)) == std::string::npos) return false;
+            i = b;
+        }
+        return true;
+    }
+
+    std::string SearchNote()
+    {
+        if (g_searchShown.find_first_not_of(" \t") == std::string::npos) return "";
+        return " matching \"" + Escape(g_searchShown) + "\"";
+    }
+
     ModToolsPlugin* Selected()
     {
         if (g_browse) return nullptr;
@@ -100,7 +136,7 @@ namespace
         if (!p)
         {
             std::string note = browse::UninstallNote("");
-            qt::SetLabelText(g_detail, ("<b>" + std::to_string(g_rowNames.size()) + " plugin(s) shown</b> in " + Escape(Narrow(plugins::Root())) + "<br>Use Show all plugins to manage other applications. Enabled states are shared." +
+            qt::SetLabelText(g_detail, ("<b>" + std::to_string(g_rowNames.size()) + " plugin(s) shown</b>" + SearchNote() + " in " + Escape(Narrow(plugins::Root())) + "<br>Use Show all plugins to manage other applications. Enabled states are shared." +
                                         (note.empty() ? "" : "<br><span style=\"color:#e0c060\">" + Escape(note) + "</span>")).c_str());
             qt::SetEnabled(g_btnReload, false); qt::SetEnabled(g_btnSettings, false); qt::SetEnabled(g_btnWebsite, false); qt::SetEnabled(g_btnUninstall, false);
             return;
@@ -142,7 +178,7 @@ namespace
         qt::SetEnabled(g_btnRefresh, !browse::Loading());
         if (!SelectedEntry(e))
         {
-            std::string t = "<b>" + std::to_string(g_browseNames.size()) + " plugin(s) shown</b>: the public plugin list, and MTPlugins' own plugins "
+            std::string t = "<b>" + std::to_string(g_browseNames.size()) + " plugin(s) shown</b>" + SearchNote() + ": the public plugin list, and MTPlugins' own plugins "
                             "that were left out in Setup. Anyone can add theirs to the list: see "
                             + Anchor("https://github.com/Aidan601/MTPlugins-Index", "github.com/Aidan601/MTPlugins-Index") + "." + BrowseMessageHtml();
             qt::SetLabelText(g_detail, t.c_str());
@@ -181,6 +217,7 @@ namespace
         for (const browse::Entry& e : browse::Entries())
         {
             if (!g_showAll && !(e.apps & uint32_t(app::ApiId()))) continue;
+            if (!Matches({ e.name, e.displayName, e.author, e.description, plugins::AppNames(e.apps), browse::StatusName(browse::StatusOf(e)) })) continue;
             std::string label = e.displayName + (e.version.empty() ? "" : "  " + e.version) + (e.author.empty() ? "" : "  by " + e.author) +
                                 "    [" + plugins::AppNames(e.apps) + "]    " + browse::StatusName(browse::StatusOf(e)) + (e.bundled ? " (comes with MTPlugins)" : "");
             qt::ListAdd(g_list, label.c_str());
@@ -220,6 +257,7 @@ namespace
         {
             // keep unknown/failed probes visible, hide known foreign apps
             if (!g_showAll && !plugins::ForThisEditor(p)) continue;
+            if (!Matches({ p->name, p->displayName, p->author, p->description, plugins::AppNames(p->apps), plugins::StateName(p->state) })) continue;
             std::string label = (p->displayName.empty() ? p->name : p->displayName) + (p->version.empty() ? "" : "  " + p->version) + "    [" + plugins::AppNames(p->apps) + "]";
             // the checkbox already says Loaded/Disabled
             if (p->state != ModToolsPlugin::Loaded && p->state != ModToolsPlugin::Disabled) label += std::string("    ") + plugins::StateName(p->state);
@@ -257,6 +295,13 @@ namespace
     }
     void OnClose(void*) { pluginmgr::Toggle(); }
     void OnReload(void*) { if (ModToolsPlugin* p = Selected()) { plugins::Reload(p); Rebuild(); } }
+
+    // Browse always shows the newest plugin list: downloaded again on every switch to it and every open in it
+    void RefreshList()
+    {
+        if (!browse::Loading() && !browse::Installing()) browse::Refresh();
+    }
+
     void OnRefresh(void*)
     {
         if (g_browse) browse::Refresh(); else plugins::Rescan();
@@ -366,7 +411,11 @@ namespace
         qt::SetChecked(g_chkShowAll, false);
         qt::BoxAddWidget(top, g_radInstalled);
         qt::BoxAddWidget(top, g_radBrowse);
-        qt::BoxAddStretch(top);
+        g_search = qt::LineEdit("", g_root);
+        qt::SetObjectName(g_search, "PluginsSearch");
+        qt::SetPlaceholder(g_search, "Search plugins");
+        qt::SetToolTip(g_search, "Show only plugins whose name, author, description, editors or state contain every word typed here");
+        qt::BoxAddWidget(top, g_search, 1);
         qt::BoxAddWidget(top, g_chkShowAll);
         qt::BoxAddLayout(main, top);
 
@@ -385,7 +434,17 @@ namespace
                                      "Shared by the launcher and both editors.");
         g_updatesShown = update::Enabled();
         qt::SetChecked(g_chkUpdates, g_updatesShown);
-        qt::BoxAddWidget(main, g_chkUpdates);
+        g_chkPluginUpdates = qt::CheckBox("Ask about plugin updates", g_root);
+        qt::SetObjectName(g_chkPluginUpdates, "PluginsAskPluginUpdates");
+        qt::SetToolTip(g_chkPluginUpdates, "When the launcher or an editor starts, offer to update the plugins you installed from Browse plugins "
+                                           "when the plugin list has a newer version. Shared by the launcher and both editors.");
+        g_pluginUpdatesShown = update::PluginsEnabled();
+        qt::SetChecked(g_chkPluginUpdates, g_pluginUpdatesShown);
+        void* asks = qt::HBox();
+        qt::BoxAddWidget(asks, g_chkUpdates);
+        qt::BoxAddWidget(asks, g_chkPluginUpdates);
+        qt::BoxAddStretch(asks);
+        qt::BoxAddLayout(main, asks);
 
         void* buttons = qt::HBox();
         g_btnReload = qt::PushButton("Reload", g_root);
@@ -427,6 +486,7 @@ namespace
     void MenuShow(void*) { pluginmgr::Show(); }
     void MenuFolder(void*) { OnFolder(nullptr); }
     void MenuWhatsNew(void*) { support::ShowWhatsNew(); }
+    void MenuCheckUpdates(void*) { update::CheckNow(); }
     void MenuReport(void*) { support::Report(true); }
     void MenuAbout(void*) { support::ShowAbout(); }
     void MenuThunk(void* user, void**) { reinterpret_cast<void (*)(void*)>(user)(nullptr); }
@@ -443,6 +503,7 @@ namespace
         void* a1 = qt::Action("Open plugins folder", menu); qt::AddAction(menu, a1); qt::Connect(a1, qt::Signal::ActionTriggered, MenuThunk, reinterpret_cast<void*>(MenuFolder));
         qt::MenuAddSeparator(menu);
         void* a3 = qt::Action("What's new...", menu); qt::AddAction(menu, a3); qt::Connect(a3, qt::Signal::ActionTriggered, MenuThunk, reinterpret_cast<void*>(MenuWhatsNew));
+        void* a6 = qt::Action("Check for updates...", menu); qt::AddAction(menu, a6); qt::Connect(a6, qt::Signal::ActionTriggered, MenuThunk, reinterpret_cast<void*>(MenuCheckUpdates));
         void* a4 = qt::Action("Report a problem...", menu); qt::AddAction(menu, a4); qt::Connect(a4, qt::Signal::ActionTriggered, MenuThunk, reinterpret_cast<void*>(MenuReport));
         qt::MenuAddSeparator(menu);
         void* a5 = qt::Action("About MTPlugins...", menu); qt::AddAction(menu, a5); qt::Connect(a5, qt::Signal::ActionTriggered, MenuThunk, reinterpret_cast<void*>(MenuAbout));
@@ -468,7 +529,7 @@ namespace pluginmgr
             // plugins are loaded once the main window exists, so their panes join the layout in a stable order
             plugins::Init();
             if (g_dialog) Rebuild();
-            update::StartupCheck();      // the launcher asks, the editors do nothing
+            update::StartupCheck();      // plugin updates in every app, the release in the launcher
             return;
         }
         update::Tick();              // update question and installer start, window or not
@@ -484,13 +545,17 @@ namespace pluginmgr
         if (now - g_lastPoll < 200) return;
         g_lastPoll = now;
         bool browseMode = qt::IsChecked(g_radBrowse);
+        std::string search = qt::EditText(g_search);
+        if (search != g_searchShown) { g_searchShown = search; Rebuild(); return; }      // the 200 ms poll debounces typing
         bool askUpdates = qt::IsChecked(g_chkUpdates);
         if (askUpdates != g_updatesShown) { g_updatesShown = askUpdates; update::SetEnabled(askUpdates); }
+        bool askPlugins = qt::IsChecked(g_chkPluginUpdates);
+        if (askPlugins != g_pluginUpdatesShown) { g_pluginUpdatesShown = askPlugins; update::SetPluginsEnabled(askPlugins); }
         if (browseMode != g_browse)
         {
             g_browse = browseMode;
             ApplyMode();
-            if (g_browse && !browse::Loaded() && !browse::Loading()) browse::Refresh();
+            if (g_browse) RefreshList(); else plugins::Rescan();
             Rebuild();
             return;
         }
@@ -530,7 +595,10 @@ namespace pluginmgr
         if (!g_dialog) return;
         g_updatesShown = update::Enabled();       // another editor may have changed it
         qt::SetChecked(g_chkUpdates, g_updatesShown);
+        g_pluginUpdatesShown = update::PluginsEnabled();
+        qt::SetChecked(g_chkPluginUpdates, g_pluginUpdatesShown);
         plugins::Rescan();                        // new plugin folders show (and load) on open
+        if (g_browse) RefreshList();
         Rebuild();
         qt::SetVisible(g_dialog, true);
         qt::Raise(g_dialog);
@@ -542,6 +610,15 @@ namespace pluginmgr
         if (!g_dialog) return;
         qt::SetChecked(browseMode ? g_radBrowse : g_radInstalled, true);   // Tick sees the change and switches
         if (!Visible()) Show();
+    }
+
+    int Search(const std::string& text)
+    {
+        if (!g_dialog) return -1;
+        qt::SetEditText(g_search, text.c_str());
+        g_searchShown = text;
+        if (!Visible()) Show(); else Rebuild();
+        return int(g_browse ? g_browseNames.size() : g_rowNames.size());
     }
 
     void Toggle()

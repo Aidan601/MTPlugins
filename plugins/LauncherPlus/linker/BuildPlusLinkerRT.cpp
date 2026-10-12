@@ -6,6 +6,7 @@
 #include <d3d11.h>
 #include <wincodec.h>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <cwctype>
 #include <cmath>
@@ -18,6 +19,9 @@
 #include "mip.h"
 #include "localized.h"
 #include "soundskip.h"
+#include "../../common/meshlod.h"
+
+extern "C" LPVOID AllocateBuffer(LPVOID origin);   // MinHook buffer.c: a 64-byte executable slot within 1 GB
 
 namespace
 {
@@ -37,6 +41,9 @@ namespace
 
         kSkipLocalized = 1u << 9,   // keep zone\en_<map>.ff when none of the localized child's inputs changed (localized.h)
         kSkipSound = 1u << 10,      // do not run sound\snd_convert.exe when none of its inputs changed (soundskip.h)
+        kRaiseAutoLod = 1u << 11,   // auto LOD past the stock 220,000-face cap within a memory budget
+        kRepairNormals = 1u << 12,  // auto LOD rebuilds zero or NaN normals instead of failing the LOD
+        kMeshoptLod = 1u << 13,     // auto LOD reduced by meshoptimizer instead of the stock simplifier
     };
 
     // a patch on decrypted linker code: RVA, expected bytes, bytes to write
@@ -66,7 +73,8 @@ namespace
         { kSkipTelemetry, "skip_telemetry" }, { kUmbraPoll, "umbra_poll" }, { kReuseD3DDevice, "reuse_d3d_device" },
         { kParallelMip, "parallel_mip" }, { kReuseWic, "reuse_wic" }, { kPrefetchFiles, "prefetch_files" },
         { kFastStat, "fast_stat" }, { kFastRecenter, "fast_recenter" }, { kSkipLocalized, "skip_localized" },
-        { kSkipSound, "skip_sound_convert" },
+        { kSkipSound, "skip_sound_convert" }, { kRaiseAutoLod, "raise_autolod_limit" },
+        { kRepairNormals, "repair_autolod_normals" }, { kMeshoptLod, "meshopt_autolod" },
     };
     unsigned g_failed = 0;   // requested code patches whose bytes did not match
 
@@ -796,6 +804,258 @@ namespace
         return MH_CreateHook(at, reinterpret_cast<LPVOID>(&HookRecenter), reinterpret_cast<LPVOID*>(&g_recenter)) == MH_OK && MH_EnableHook(at) == MH_OK;
     }
 
+    // Auto LOD reducer (linker+0x76B800). raise_autolod_limit: past stock's 220,000 faces while the memory estimate fits
+    // a shared budget. repair_autolod_normals: zero or NaN normals rebuilt instead of failing the LOD.
+    constexpr uintptr_t kAutoLodRva = 0x76B800, kAutoLodFaceCapRva = 0x76B91E, kAutoLodNormalCheckRva = 0x76C122, kSimplifyRva = 0x7AE170;
+    const unsigned char kSimplifySignature[] = { 0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57, 0x48, 0x83, 0xEC, 0x40 };
+    const unsigned char kAutoLodSignature[] = { 0x48, 0x8B, 0xC4, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57 };
+    const unsigned char kAutoLodFaceCap[] = { 0x81, 0xFB, 0x60, 0x5B, 0x03, 0x00, 0x76 };    // cmp ebx, 220000 / jbe
+    const unsigned char kAutoLodFaceCapOff[] = { 0x81, 0xFB, 0xFF, 0xFF, 0xFF, 0xFF, 0x76 }; // cmp ebx, 0xFFFFFFFF / jbe
+    const unsigned char kAutoLodNormalCheck[] = { 0x44, 0x0F, 0x2F, 0xD1, 0x77, 0x0F, 0x48, 0x8D, 0x15 };   // comiss / ja ok / lea msg
+    const unsigned char kAutoLodNormalCheckOff[] = { 0x44, 0x0F, 0x2F, 0xD1, 0xEB, 0x0F, 0x48, 0x8D, 0x15 }; // ja -> jmp
+    constexpr unsigned kStockAutoLodFaces = 220000;
+    // xmesh cache name "_f%d_s%f_%s%s%s" (faces, scale, geo/collision, _rigid, _origuv): va() call in both converters
+    constexpr uintptr_t kMeshNameCallRva[2] = { 0x7768BD, 0x7778E9 }, kVaRva = 0x2CF4B0;
+    using VaFn = const char* (*)(const char*, ...);
+    VaFn g_va = nullptr;
+
+    // dev: BB_MESHOPT_STOCK_FACES=<n>,<n>,... keeps those target face counts on the stock simplifier (side-by-side tests)
+    bool KeepStock(unsigned faces)
+    {
+        static const std::vector<unsigned> list = [] {
+            std::vector<unsigned> r;
+            char s[2048] = {};
+            if (GetEnvironmentVariableA("BB_MESHOPT_STOCK_FACES", s, sizeof s))
+                for (char* p = s; *p; ++p) if (unsigned n = strtoul(p, &p, 10)) { r.push_back(n); if (!*p) break; }
+            return r;
+        }();
+        for (unsigned n : list) if (n == faces) return true;
+        return false;
+    }
+
+    double SimplifyKeepStock(void* params, meshlod::Vec* faces, meshlod::Vec* corners, double a4, unsigned target, float a6, meshlod::Vec* out)
+    {
+        return (KeepStock(target) ? meshlod::g_simplify : meshlod::HookSimplify)(params, faces, corners, a4, target, a6, out);
+    }
+
+    // reduced LODs from meshoptimizer get their own cache entries: switching never reuses the other simplifier's
+    const char* MeshCacheName(const char* fmt, int faces, double scale, const char* kind, const char* rigid, const char* origuv)
+    {
+        return g_va(faces && !KeepStock(unsigned(faces)) ? "_f%d_s%f_%s%s%s_mo2" : fmt, faces, scale, kind, rigid, origuv);
+    }
+
+    bool WriteCode(unsigned char* at, const unsigned char* bytes, size_t n);
+
+    bool InstallMeshCacheName(unsigned char* base)
+    {
+        for (uintptr_t rva : kMeshNameCallRva)
+        {
+            unsigned char* call = base + rva;
+            const unsigned char* fmt = call + *reinterpret_cast<const int32_t*>(call - 4);   // lea rcx, [rip + fmt] just before
+            if (call[0] != 0xE8 || call + 5 + *reinterpret_cast<const int32_t*>(call + 1) != base + kVaRva ||
+                call[-7] != 0x48 || call[-6] != 0x8D || call[-5] != 0x0D || strcmp(reinterpret_cast<const char*>(fmt), "_f%d_s%f_%s%s%s"))
+                return false;
+        }
+        g_va = reinterpret_cast<VaFn>(base + kVaRva);
+        for (uintptr_t rva : kMeshNameCallRva)
+        {
+            unsigned char* call = base + rva;
+            unsigned char* stub = static_cast<unsigned char*>(AllocateBuffer(call));
+            if (!stub) return false;
+            const uint64_t target = reinterpret_cast<uint64_t>(&MeshCacheName);
+            stub[0] = 0x48; stub[1] = 0xB8; memcpy(stub + 2, &target, 8); stub[10] = 0xFF; stub[11] = 0xE0;   // mov rax, imm64 / jmp rax
+            FlushInstructionCache(GetCurrentProcess(), stub, 12);
+            unsigned char rel[5] = { 0xE8 };
+            const int32_t d = int32_t(stub - (call + 5));
+            memcpy(rel + 1, &d, 4);
+            if (!WriteCode(call, rel, 5)) return false;
+        }
+        return true;
+    }
+    constexpr int kStockAutoLodBones = 1000;   // stock's bone check stays in place
+    using AutoLodFn = void (*)(unsigned char*, void*, float*);
+    AutoLodFn g_autoLod = nullptr;
+    unsigned long long g_autoLodBudget = 0;    // bytes for all reductions past the stock cap together, set at install
+    bool g_autoLodRaise = false, g_autoLodRepair = false, g_autoLodMeshopt = false;
+    SRWLOCK g_autoLodLock = SRWLOCK_INIT;
+    CONDITION_VARIABLE g_autoLodFree = CONDITION_VARIABLE_INIT;
+    unsigned long long g_autoLodInUse = 0;     // estimates of the running reductions past the stock cap, under g_autoLodLock
+    volatile LONG g_autoLodNormalsFixed = 0;
+
+    // measured peak per reduction: about 2 KB per face plus 48 bytes per face and weight slot (bones + 11)
+    unsigned long long AutoLodBytes(unsigned faces, int bones) { return (unsigned long long)faces * (2048ull + 48ull * (unsigned)(bones + 11)); }
+
+    bool UnitNormal(const float* n)
+    {
+        const float len = sqrtf(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+        return fabsf(len - 1.0f) < 0.002f;   // stock's test, false for NaN
+    }
+
+    // model +76 faces, +144 vertices (288 bytes, position at +132), +160 faces (208 bytes, corner k at +56k: +8 vertex, +12 normal)
+    int RepairAutoLodNormals(unsigned char* model)
+    {
+        const int faces = *reinterpret_cast<int*>(model + 76);
+        unsigned char* faceBase = *reinterpret_cast<unsigned char**>(model + 160);
+        unsigned char* vertBase = *reinterpret_cast<unsigned char**>(model + 144);
+        if (faces <= 0 || !faceBase || !vertBase) return 0;
+        const auto corner = [&](int f, int k) { return reinterpret_cast<float*>(faceBase + 208ull * f + 8 + 56ull * k + 4); };
+        const auto geometric = [&](int f, float* out) {
+            const float* p[3];
+            for (int k = 0; k < 3; ++k) p[k] = reinterpret_cast<float*>(vertBase + 288ull * *reinterpret_cast<int*>(faceBase + 208ull * f + 8 + 56ull * k) + 132);
+            const float a[3] = { p[1][0] - p[0][0], p[1][1] - p[0][1], p[1][2] - p[0][2] }, b[3] = { p[2][0] - p[0][0], p[2][1] - p[0][1], p[2][2] - p[0][2] };
+            out[0] = a[1] * b[2] - a[2] * b[1]; out[1] = a[2] * b[0] - a[0] * b[2]; out[2] = a[0] * b[1] - a[1] * b[0];
+        };
+        int winding = 0;   // +1: the corner normals follow (p1-p0)x(p2-p0), -1: the opposite, 0: not measured yet
+        int fixed = 0;
+        for (int f = 0; f < faces; ++f)
+        {
+            float* n[3] = { corner(f, 0), corner(f, 1), corner(f, 2) };
+            const bool ok[3] = { UnitNormal(n[0]), UnitNormal(n[1]), UnitNormal(n[2]) };
+            if (ok[0] && ok[1] && ok[2]) continue;
+            float avg[3] = { 0, 0, 0 };
+            for (int k = 0; k < 3; ++k)
+                if (ok[k]) { avg[0] += n[k][0]; avg[1] += n[k][1]; avg[2] += n[k][2]; }
+            float len = sqrtf(avg[0] * avg[0] + avg[1] * avg[1] + avg[2] * avg[2]);
+            if (!(len > 1e-6f))
+            {
+                if (!winding)
+                {
+                    long long votes = 0;   // sign agreement over faces whose normals are all valid
+                    for (int g = 0; g < faces && (votes < 64 && votes > -64); ++g)
+                    {
+                        if (!UnitNormal(corner(g, 0)) || !UnitNormal(corner(g, 1)) || !UnitNormal(corner(g, 2))) continue;
+                        float c[3]; geometric(g, c);
+                        const float* m = corner(g, 0);
+                        const float d = c[0] * m[0] + c[1] * m[1] + c[2] * m[2];
+                        votes += d > 0 ? 1 : (d < 0 ? -1 : 0);
+                    }
+                    winding = votes < 0 ? -1 : 1;
+                }
+                geometric(f, avg);
+                avg[0] *= (float)winding; avg[1] *= (float)winding; avg[2] *= (float)winding;
+                len = sqrtf(avg[0] * avg[0] + avg[1] * avg[1] + avg[2] * avg[2]);
+                if (!(len > 1e-12f)) { avg[0] = 0; avg[1] = 0; avg[2] = 1; len = 1; }   // zero-area face
+            }
+            for (int k = 0; k < 3; ++k)
+                if (!ok[k]) { n[k][0] = avg[0] / len; n[k][1] = avg[1] / len; n[k][2] = avg[2] / len; ++fixed; }
+        }
+        return fixed;
+    }
+
+    // dev: BB_AUTOLOD_DUMP=<dir> writes every reducer input and output as <dir>\<input faces>_<output faces>_<in|out>_<n>.obj
+    void DumpAutoLodModel(const unsigned char* model, unsigned inFaces, const char* tag)
+    {
+        char dir[MAX_PATH] = {};
+        if (!GetEnvironmentVariableA("BB_AUTOLOD_DUMP", dir, sizeof dir)) return;
+        static volatile LONG serial = 0;
+        const int faces = *reinterpret_cast<const int*>(model + 76);
+        char path[MAX_PATH + 64];
+        snprintf(path, sizeof path, "%s\\%u_%d_%s_%ld.obj", dir, inFaces, faces, tag, InterlockedIncrement(&serial));
+        FILE* f = fopen(path, "wb");
+        if (!f) return;
+        const unsigned char* faceBase = *reinterpret_cast<unsigned char* const*>(model + 160);
+        const unsigned char* vertBase = *reinterpret_cast<unsigned char* const*>(model + 144);
+        for (int i = 0; i < faces; ++i)
+            for (int k = 0; k < 3; ++k)
+            {
+                const unsigned char* c = faceBase + 208ull * i + 8 + 56ull * k;
+                const float* p = reinterpret_cast<const float*>(vertBase + 288ull * *reinterpret_cast<const int*>(c) + 132);
+                const float* n = reinterpret_cast<const float*>(c + 4);
+                const float* uv = reinterpret_cast<const float*>(c + 32);
+                fprintf(f, "v %g %g %g\nvn %g %g %g\nvt %g %g\n", p[0], p[1], p[2], n[0], n[1], n[2], uv[0], uv[1]);
+            }
+        for (int i = 0; i < faces; ++i)
+            fprintf(f, "f %d/%d/%d %d/%d/%d %d/%d/%d\n", 3 * i + 1, 3 * i + 1, 3 * i + 1, 3 * i + 2, 3 * i + 2, 3 * i + 2, 3 * i + 3, 3 * i + 3, 3 * i + 3);
+        fclose(f);
+    }
+
+    void HookAutoLod(unsigned char* model, void* reader, float* spec)
+    {
+        const unsigned faces = *reinterpret_cast<unsigned*>(model + 76);
+        const int bones = *reinterpret_cast<int*>(model + 88) + *reinterpret_cast<int*>(model + 124);
+        const bool big = g_autoLodRaise && faces > kStockAutoLodFaces && bones >= 0 && bones <= kStockAutoLodBones;
+        if (big)
+        {
+            const unsigned long long need = AutoLodBytes(faces, bones);
+            if (need > g_autoLodBudget || 3ull * faces * (unsigned)(bones + 11) >= 0xFFFFFFFFull)
+            {
+                // the linker's xmodel converter catches its own char* messages like this one
+                thread_local char msg[320];
+                snprintf(msg, sizeof msg, "Model is too complex for auto LOD, %u faces with %d bones needs about %llu MB (budget %llu MB, LauncherPlus.ini [linker] autolod_budget_mb)\n",
+                         faces, bones, need >> 20, g_autoLodBudget >> 20);
+                throw static_cast<char*>(msg);
+            }
+            fprintf(stdout, "[BetterBuild] Auto LOD past the stock limit: %u faces, %d bones (stock max %u faces, about %llu MB of a %llu MB budget).\n",
+                    faces, bones, kStockAutoLodFaces, need >> 20, g_autoLodBudget >> 20);
+            fflush(stdout);
+            AcquireSRWLockExclusive(&g_autoLodLock);
+            while (g_autoLodInUse && g_autoLodInUse + need > g_autoLodBudget) SleepConditionVariableSRW(&g_autoLodFree, &g_autoLodLock, INFINITE, 0);
+            g_autoLodInUse += need;
+            ReleaseSRWLockExclusive(&g_autoLodLock);
+        }
+        struct Release
+        {
+            unsigned long long n;
+            ~Release()
+            {
+                if (!n) return;
+                AcquireSRWLockExclusive(&g_autoLodLock);
+                g_autoLodInUse -= n;
+                ReleaseSRWLockExclusive(&g_autoLodLock);
+                WakeAllConditionVariable(&g_autoLodFree);
+            }
+        } release{ big ? AutoLodBytes(faces, bones) : 0 };
+        struct Simplifier
+        {
+            explicit Simplifier(int stride) { meshlod::t_stride = stride; }
+            ~Simplifier() { meshlod::t_stride = 0; meshlod::t_attributes = {}; }
+        } simplifier(g_autoLodMeshopt && bones >= 0 ? bones + 11 : 0);
+        DumpAutoLodModel(model, faces, "in");
+        g_autoLod(model, reader, spec);
+        DumpAutoLodModel(model, faces, "out");
+        if (g_autoLodRepair)
+            if (const int fixed = RepairAutoLodNormals(model))
+            {
+                InterlockedAdd(&g_autoLodNormalsFixed, fixed);
+                fprintf(stdout, "[BetterBuild] Auto LOD to %d faces: rebuilt %d invalid vertex normals (stock fails this LOD with \"Produced invalid normal\").\n", *reinterpret_cast<int*>(model + 76), fixed);
+                fflush(stdout);
+            }
+    }
+
+    bool WriteCode(unsigned char* at, const unsigned char* bytes, size_t n)
+    {
+        DWORD old = 0;
+        if (!VirtualProtect(at, n, PAGE_EXECUTE_READWRITE, &old)) return false;
+        memcpy(at, bytes, n);
+        VirtualProtect(at, n, old, &old);
+        FlushInstructionCache(GetCurrentProcess(), at, n);
+        return true;
+    }
+
+    // stock's checks are turned off only once the hook that replaces them is live
+    bool InstallAutoLod(unsigned char* base, bool raise, bool repair, bool meshopt)
+    {
+        unsigned char* fn = base + kAutoLodRva;
+        unsigned char* cap = base + kAutoLodFaceCapRva;
+        unsigned char* normal = base + kAutoLodNormalCheckRva;
+        unsigned char* simplify = base + kSimplifyRva;
+        if (memcmp(fn, kAutoLodSignature, sizeof kAutoLodSignature) || memcmp(cap, kAutoLodFaceCap, sizeof kAutoLodFaceCap) ||
+            memcmp(normal, kAutoLodNormalCheck, sizeof kAutoLodNormalCheck) || (meshopt && memcmp(simplify, kSimplifySignature, sizeof kSimplifySignature)))
+            return false;
+        MEMORYSTATUSEX mem = { sizeof mem };
+        g_autoLodBudget = GlobalMemoryStatusEx(&mem) ? mem.ullTotalPhys / 5 * 2 : 4ull << 30;
+        char env[32] = {};
+        if (GetEnvironmentVariableA("BB_AUTOLOD_BUDGET_MB", env, sizeof env) && atoi(env) > 0) g_autoLodBudget = (unsigned long long)atoi(env) << 20;
+        g_autoLodRaise = raise;
+        g_autoLodRepair = repair;
+        g_autoLodMeshopt = meshopt;
+        if (meshopt && (!InstallMeshCacheName(base) || MH_CreateHook(simplify, GetEnvironmentVariableA("BB_MESHOPT_STOCK_FACES", nullptr, 0) ? reinterpret_cast<LPVOID>(&SimplifyKeepStock) : reinterpret_cast<LPVOID>(&meshlod::HookSimplify), reinterpret_cast<LPVOID*>(&meshlod::g_simplify)) != MH_OK || MH_EnableHook(simplify) != MH_OK)) return false;
+        if (MH_CreateHook(fn, reinterpret_cast<LPVOID>(&HookAutoLod), reinterpret_cast<LPVOID*>(&g_autoLod)) != MH_OK || MH_EnableHook(fn) != MH_OK) return false;
+        if (raise && !WriteCode(cap, kAutoLodFaceCapOff, sizeof kAutoLodFaceCapOff)) return false;
+        if (repair && !WriteCode(normal, kAutoLodNormalCheckOff, sizeof kAutoLodNormalCheckOff)) return false;
+        return true;
+    }
+
     // diagnostics: an access violation prints module+offset, address, thread and stack to stderr
     LONG WINAPI OnException(EXCEPTION_POINTERS* e)
     {
@@ -867,6 +1127,9 @@ namespace
         }
         if ((g_patches & kParallelMip) && !InstallMip(base)) g_failed |= kParallelMip;
         if ((g_patches & kFastRecenter) && !InstallRecenter(base)) g_failed |= kFastRecenter;
+        constexpr unsigned kAutoLodBits = kRaiseAutoLod | kRepairNormals | kMeshoptLod;
+        if ((g_patches & kAutoLodBits) && !InstallAutoLod(base, (g_patches & kRaiseAutoLod) != 0, (g_patches & kRepairNormals) != 0, (g_patches & kMeshoptLod) != 0))
+            g_failed |= g_patches & kAutoLodBits;
         Announce();
     }
 

@@ -26,9 +26,22 @@ Fixes and improvements for Radiant, the Black Ops III map editor. Nothing in Rad
 ## Editing
 
 - A rotation gizmo for rotating objects, toggled under Preferences > Selection > Rotation gizmo rings.
-- A click on an effect in the FX Browser sets it on the selected fx entities.
+- In the Legacy FX Browser, a click on an effect sets it on the selected fx entities.
+- The Icon Size sliders of the Models, Textures and FX Browser panes resize the tiles while you drag them, without the lag.
+- A selected model shows just its outline in the 3D view, seen through walls. Alt+J or View > Toggle Model Outline switches to Radiant's wireframe and back.
 - Right-click a prefab or folder in the Prefab Browser > Show in Explorer.
+- The color dialog (Entity Color and the other color prompts) takes hex and 0-1 colors, sets light colors by Kelvin, copies the color, shows its eyedropper with an icon and keeps the recent colors row between sessions.
 - The Log actions box beside Clear in the Output pane lists what you did and how.
+- Auto LODs shown in the views match the ones Launcher+ builds, so what you see is what the game gets.
+
+## FX Browser
+
+- Every effect shows as a thumbnail that plays on a loop, with a ground grid and X, Y and Z axes. Clips are filmed as effects come on screen and kept in `radiant\fx_thumbs`.
+- Click an effect to play it in the preview box beside the grid. Drag in the box to orbit, the wheel zooms, a middle drag pans, a double-click resets the view. Loop restarts the preview when it ends.
+- Double-click an effect to set it on the selected fx entities, or drag it into the 3D view to place a new one.
+- The top bar works like the Models pane: All, All In Use, All In Use Top, Favorites (right-click an effect to add it, shared with the Legacy browser) and a name filter. The Icon Size slider is at the bottom.
+- Options: Play All (every thumbnail plays, effects that load models are skipped), XYZ Grid, Reset Preview Camera, Refresh.
+- Tick Legacy (bottom left) for Radiant's own FX Browser.
 
 ## Look and settings
 
@@ -50,7 +63,7 @@ Everything above is set in Radiant's own Preferences where possible. The rest li
 - `[bake]` light bake quality and speed
 - `[performance]` the speed-ups, each one can be switched off
 - `[gizmo]`, `[camera]`, `[camera_presets]` the rotation gizmo and the camera
-- `[fx]`, `[prefabs]`, `[files]`, `[preferences]` the editing and dialog changes
+- `[fx]`, `[fxpreview]`, `[prefabs]`, `[selection]`, `[files]`, `[preferences]` the editing and dialog changes
 - `[actionlog]` the action log and how much of it goes into problem reports
 - `[crashguard]` each crash guard, on or off
 - `[images]`, `[theme]`, `[colors]` image formats, theme and view colors

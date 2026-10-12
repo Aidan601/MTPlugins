@@ -433,9 +433,11 @@ runtime, so nobody needs a Visual C++ redistributable.
 
 To let everyone find it, add it to the public plugin list: it is what **Browse plugins** in the Plugins window
 shows, and people install and update your plugin from there with one click. Open a pull request on
-https://github.com/Aidan601/MTPlugins-Index with your files in it, or with links to a GitHub release of them (its
-README walks through it; a script there writes the entry with the file hashes for you). Your source does not have
-to be public. Set `api.url` to your plugin's page, if it has one, so the Website button leads there.
+https://github.com/Aidan601/MTPlugins-Index. The list builds every plugin itself from its source on GitHub, so
+users know the DLL comes from code that was read: push your plugin to a GitHub repo, run `tools/submit.py` from a
+fork of the list and open a pull request with the one file it writes. Your repo can stay private (`--private`):
+then only the list's maintainer reads it. The list's README walks through it. Set `api.url` to your plugin's page,
+if it has one, so the Website button leads there.
 
 
 ## 12. Compatibility

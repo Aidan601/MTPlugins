@@ -802,6 +802,11 @@ namespace plugins
             if (sub == "rescan") { Rescan(); return "rescanned"; }
             if (sub == "window")
             {
+                if (arg == "search" || arg.rfind("search ", 0) == 0)
+                {
+                    int n = pluginmgr::Search(arg.size() > 7 ? arg.substr(7) : "");
+                    return n < 0 ? "no window" : std::to_string(n) + " plugin(s) shown";
+                }
                 if (arg == "browse" || arg == "installed") pluginmgr::ShowMode(arg == "browse");
                 else if (arg != "status") pluginmgr::Toggle();
                 return pluginmgr::Visible() ? "window shown" : "window hidden";
@@ -834,13 +839,14 @@ namespace plugins
             if (sub == "reload") { Reload(p); return p->name + " " + StateName(p->state) + (p->error.empty() ? "" : " (" + p->error + ")"); }
             return "unknown plugins command '" + sub + "'";
         }
-        if (first == "update")      // update [check|on|off|plugins [install]] (update.cpp)
+        if (first == "update")      // update [check|on|off|plugins [install|on|off]] (update.cpp)
         {
             if (rest == "plugins") return update::PluginStatus();
+            if (rest == "plugins on" || rest == "plugins off") { update::SetPluginsEnabled(rest == "plugins on"); return update::Status(); }
             if (rest == "plugins install") { update::InstallPluginUpdates(); return update::PluginStatus(); }
             if (rest == "check") update::CheckNow();
             else if (rest == "on" || rest == "off") update::SetEnabled(rest == "on");
-            else if (!rest.empty()) return "unknown update command '" + rest + "' (check, on, off, plugins, plugins install)";
+            else if (!rest.empty()) return "unknown update command '" + rest + "' (check, on, off, plugins, plugins install, plugins on, plugins off)";
             return update::Status();
         }
         if (first == "ape" && app::IsApe())

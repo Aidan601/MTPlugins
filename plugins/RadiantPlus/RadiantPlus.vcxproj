@@ -91,7 +91,11 @@ xcopy /y /i /d /e "$(SolutionDir)themes" "$(SolutionDir)build\$(Configuration)\p
     <ClCompile Include="bake_lowrays.cpp" />
     <ClCompile Include="crashguard.cpp" />
     <ClCompile Include="image_formats.cpp" />
+    <ClCompile Include="autolod.cpp" />
+    <ClCompile Include="..\common\third_party\meshoptimizer\simplifier.cpp" />
+    <ClCompile Include="..\common\third_party\meshoptimizer\allocator.cpp" />
     <ClCompile Include="xylod.cpp" />
+    <ClCompile Include="seloutline.cpp" />
     <ClCompile Include="camwalk.cpp" />
     <ClCompile Include="campresets.cpp" />
     <ClCompile Include="gamefov.cpp" />
@@ -101,7 +105,9 @@ xcopy /y /i /d /e "$(SolutionDir)themes" "$(SolutionDir)build\$(Configuration)\p
     <ClCompile Include="filtercache.cpp" />
     <ClCompile Include="fxswap.cpp" />
     <ClCompile Include="fxpreview.cpp" />
+    <ClCompile Include="iconsize.cpp" />
     <ClCompile Include="prefabexplore.cpp" />
+    <ClCompile Include="colorpicker.cpp" />
     <ClCompile Include="filedialogs.cpp" />
     <ClCompile Include="dynbuffers.cpp" />
     <ClCompile Include="prefswindow.cpp" />
@@ -111,12 +117,14 @@ xcopy /y /i /d /e "$(SolutionDir)themes" "$(SolutionDir)build\$(Configuration)\p
     <ClCompile Include="..\common\themeicons.cpp" />
     <ClCompile Include="..\common\themeeditor.cpp" />
     <ClCompile Include="..\common\discordrpc.cpp" />
+    <ClCompile Include="..\common\colorextras.cpp" />
     <ResourceCompile Include="RadiantPlus.rc" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\sdk\modtools_plugin.h" />
     <ClInclude Include="..\common\themeicons.h" />
     <ClInclude Include="..\common\themeeditor.h" />
+    <ClInclude Include="..\common\colorextras.h" />
     <ClInclude Include="..\common\discordrpc.h" />
     <ClInclude Include="ray_guiding.h" />
     <ClInclude Include="bake_guiding.h" />
@@ -127,7 +135,9 @@ xcopy /y /i /d /e "$(SolutionDir)themes" "$(SolutionDir)build\$(Configuration)\p
     <ClInclude Include="bake_lowrays.h" />
     <ClInclude Include="crashguard.h" />
     <ClInclude Include="image_formats.h" />
+    <ClInclude Include="autolod.h" />
     <ClInclude Include="xylod.h" />
+    <ClInclude Include="seloutline.h" />
     <ClInclude Include="camwalk.h" />
     <ClInclude Include="campresets.h" />
     <ClInclude Include="gamefov.h" />
@@ -138,7 +148,9 @@ xcopy /y /i /d /e "$(SolutionDir)themes" "$(SolutionDir)build\$(Configuration)\p
     <ClInclude Include="filtercache.h" />
     <ClInclude Include="fxswap.h" />
     <ClInclude Include="fxpreview.h" />
+    <ClInclude Include="iconsize.h" />
     <ClInclude Include="prefabexplore.h" />
+    <ClInclude Include="colorpicker.h" />
     <ClInclude Include="filedialogs.h" />
     <ClInclude Include="dynbuffers.h" />
     <ClInclude Include="prefswindow.h" />

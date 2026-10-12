@@ -11,8 +11,10 @@
 #include "bake_lowrays.h"
 #include "crashguard.h"
 #include "image_formats.h"
+#include "autolod.h"
 #include "themes.h"
 #include "xylod.h"
+#include "seloutline.h"
 #include "camwalk.h"
 #include "gamefov.h"
 #include "campresets.h"
@@ -22,7 +24,9 @@
 #include "filtercache.h"
 #include "fxswap.h"
 #include "fxpreview.h"
+#include "iconsize.h"
 #include "prefabexplore.h"
+#include "colorpicker.h"
 #include "filedialogs.h"
 #include "dynbuffers.h"
 #include "prefswindow.h"
@@ -8825,6 +8829,7 @@ namespace
         rp::Log("loaded: uncap=%d pace=%d tick_ms=%d (0 = from Max FPS), Max FPS preference %.0f", g_uncap ? 1 : 0, g_pace ? 1 : 0, g_tickMs, MaxFps());
         br::crashguard::Setup();
         br::formats::Setup();
+        br::autolod::Setup();
         br::theme::Setup();
         SetupBake();
         {
@@ -8867,6 +8872,9 @@ namespace
         br::fxswap::Setup();
         br::fxpreview::Setup();
         br::prefabexplore::Setup();
+        br::iconsize::Setup();
+        br::colorpicker::Setup();
+        br::seloutline::Setup();
         br::filedialogs::Setup();
         br::dynbuffers::Setup();
         br::prefswin::Setup();
@@ -8912,6 +8920,9 @@ namespace
         br::campresets::Shutdown();
         br::fxpreview::Shutdown();
         br::prefabexplore::Shutdown();
+        br::iconsize::Shutdown();
+        br::colorpicker::Shutdown();
+        br::seloutline::Shutdown();
         br::dynbuffers::Shutdown();
         br::actionlog::Shutdown();
         RemoveDraftRadio();
@@ -8947,7 +8958,10 @@ namespace
         g_v6TouchTailUntil = GetTickCount64() + 3000;
         if (g_v6LoadPassOpen) { g_v6LoadPassOpen = false; br::filtercache::PassEnd(); }
         br::loadpf::MapLoadEnd();
+        br::fxpreview::MapLoaded();
     }
+    void OnBeforeScopeChange(void) { br::fxpreview::BeforeScopeChange(); }
+    void OnScopeChanged(const wchar_t*, int depth) { br::fxpreview::ScopeChanged(depth); }
 
     void OnTick(void)
     {
@@ -8958,6 +8972,7 @@ namespace
         br::fxswap::Tick();
         br::fxpreview::Tick();
         br::prefabexplore::Tick();
+        br::iconsize::Tick();
         br::dynbuffers::Tick();
         br::actionlog::Tick();
         br::loadpf::Tick();
@@ -9026,6 +9041,7 @@ namespace
     {
         if (ctx->view == 1) ++g_frames;
         br::rotgizmo::Draw(ctx);
+        br::seloutline::Draw(ctx->view);
     }
 
     const char* OnCommand(const char* cmd)
@@ -9041,6 +9057,7 @@ namespace
         if (c == "dxvk 0" || c == "dxvk 1")    { reply = DxvkSet(c.back() == '1'); return reply.c_str(); }
         if (c == "dxvk restart")               { DxvkRestartRadiant(); reply = "restarting Radiant (File/Exit, then the same command line)"; return reply.c_str(); }
         if (br::xylod::Command(c, reply)) return reply.c_str();
+        if (br::seloutline::Command(c, reply)) return reply.c_str();
         if (br::camwalk::Command(c, reply)) return reply.c_str();
         if (br::loadpf::Command(c, reply)) return reply.c_str();
         if (br::filesearch::Command(c, reply)) return reply.c_str();
@@ -9048,6 +9065,8 @@ namespace
         if (br::fxswap::Command(c, reply)) return reply.c_str();
         if (br::fxpreview::Command(c, reply)) return reply.c_str();
         if (br::prefabexplore::Command(c, reply)) return reply.c_str();
+        if (br::iconsize::Command(c, reply)) return reply.c_str();
+        if (br::colorpicker::Command(c, reply)) return reply.c_str();
         if (br::filedialogs::Command(c, reply)) return reply.c_str();
         if (br::dynbuffers::Command(c, reply)) return reply.c_str();
         if (br::prefswin::Command(c, reply)) return reply.c_str();
@@ -9951,7 +9970,7 @@ extern "C" MODTOOLS_PLUGIN_EXPORT const ModToolsPluginApi* ModToolsPluginEntry(M
     api.apiVersion = MODTOOLS_PLUGIN_API_VERSION;
     api.name = "RadiantPlus";
     api.displayName = "Radiant+";
-    api.version = "1.0.0";
+    api.version = "1.1.0";
     api.author = "Figglebottom";
     api.description = "QOL fixes and improvements to Radiant.";
     api.url = "https://github.com/Aidan601/MTPlugins/tree/main/plugins/RadiantPlus";
@@ -9960,6 +9979,8 @@ extern "C" MODTOOLS_PLUGIN_EXPORT const ModToolsPluginApi* ModToolsPluginEntry(M
     api.OnTick = OnTick;
     api.OnMapLoading = OnMapLoading;
     api.OnMapLoaded = OnMapLoaded;
+    api.OnBeforeScopeChange = OnBeforeScopeChange;
+    api.OnScopeChanged = OnScopeChanged;
     api.OnDraw = OnDraw;
     api.OnCommand = OnCommand;
     api.apps = MODTOOLS_APP_RADIANT;

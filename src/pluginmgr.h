@@ -9,6 +9,7 @@ namespace pluginmgr
     void Show();
     void Toggle();
     void ShowMode(bool browse);   // show the window in Installed or Browse mode (command channel, tests)
+    int  Search(const std::string& text);   // set the search box and show the window, returns the rows shown (-1 = no window)
     bool Visible();
     void Shutdown();
 }

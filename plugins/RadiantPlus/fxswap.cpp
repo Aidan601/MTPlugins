@@ -2,7 +2,6 @@
 // through Radiant's Entity Info key edit path (one Ctrl+Z). It waits out the double-click time so a double-click (place a new fx) changes nothing.
 #include "modtools_plugin.hpp"
 #include "fxswap.h"
-#include "fxpreview.h"
 #include <windows.h>
 #include <cstddef>
 #include <cstdint>
@@ -432,7 +431,7 @@ void Tick()
     {
         if (GetAsyncKeyState(VK_LBUTTON) & 0x8000) g_dueMs = now + 50;            // a new press may still be a double-click
         else if (Apply(g_pending) < 0) g_dueMs = now + 100;                         // an undo operation is open: wait
-        else { br::fxpreview::OnBrowserClick(g_pending); g_pending.clear(); }
+        else g_pending.clear();
     }
     if (now < g_nextScanMs) return;
     // the browser is created with the panes, look until it exists, then re-check now and then
@@ -444,6 +443,18 @@ void Tick()
 int ApplyToSelection(const std::string& name)
 {
     return g_ready ? Apply(name) : -2;
+}
+
+void InUse(std::vector<std::string>& out)
+{
+    out.clear();
+    if (!g_ready || !rp::Has(&rp::host->ForEachEntity)) return;
+    rp::ForEachEntity([&](ModToolsEntity e)
+    {
+        const char* ent = static_cast<const char*>(e);
+        std::string fx;
+        if (ent && IsFx(ent) && EntityKey(ent, "fxdef", fx) && !fx.empty()) out.push_back(fx);
+    });
 }
 
 void* Browser()

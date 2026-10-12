@@ -379,7 +379,7 @@ extern "C" MODTOOLS_PLUGIN_EXPORT const ModToolsPluginApi* ModToolsPluginEntry(M
     api.apiVersion = MODTOOLS_PLUGIN_API_VERSION;
     api.name = "TeamCreate";
     api.displayName = "Team Create";
-    api.version = "0.9.0";   // experimental
+    api.version = "0.9.1";   // experimental
     api.author = "Figglebottom";
     api.description = "Allows for multiple users to edit a map in Radiant at the same time, and to play it together with Play Test.";
     api.url = "https://github.com/Aidan601/MTPlugins/tree/main/plugins/TeamCreate";

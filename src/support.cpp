@@ -379,64 +379,39 @@ namespace
     }
 
     // ---- what's new --------------------------------------------------------------------------------------------
-    // Edit for every release: one entry per plugin of ours, shown in this order when it is loaded in this application.
-    // Plugins with no entry follow, listed with their own description.
+    // Edit for every release: what is new in each plugin of ours, shown in this order when it is loaded in this application.
+    // An empty entry hides a plugin with nothing new. Plugins with no entry follow, listed with their own description.
     struct Note { const char* plugin; uint32_t apps; const char* html; };
     const Note kNotes[] = {
         { "RadiantPlus", MODTOOLS_APP_RADIANT,
           "<b>Radiant+</b><ul>"
-          "<li>Speed and stability<ul>"
-          "<li>Removed 60 FPS cap. Change the limit under Preferences > Camera > Max FPS.</li>"
-          "<li>Maps load faster.</li>"
-          "<li>Smoother camera movement in the 3D view, no more stutter.</li>"
-          "<li>Faster 3D view with game view off.</li>"
-          "<li>Smoother 2D views on big maps.</li>"
-          "<li>Guards against crashes Radiant is known for.</li></ul></li>"
-          "<li>Lighting<ul>"
-          "<li>Light bakes are faster, and Low and Medium come out closer to High.</li>"
-          "<li>The LL button in front of L on the lighting toolbar bakes a fast draft for quick checks.</li></ul></li>"
-          "<li>Camera<ul>"
-          "<li>Set the game view FOV under Preferences > Camera > GameView FOV.</li>"
-          "<li>Hover a Camera Movement Mode to see its controls, or make your own presets with Edit Camera Presets... in the same list.</li></ul></li>"
-          "<li>Editing<ul>"
-          "<li>Rotation gizmo for rotating objects, can be toggled in Preferences > Selection > Rotation gizmo rings.</li>"
-          "<li>A click in the FX Browser sets the effect of the selected fx entities.</li>"
-          "<li>Right-click a prefab or folder in the Prefab Browser > Show in Explorer.</li>"
-          "<li>Log actions box in the Output pane shows what you did and how.</li></ul></li>"
-          "<li>Settings<ul>"
-          "<li>Themes and a theme editor under Preferences > Color > Theme.</li>"
-          "<li>Switch to the Vulkan renderer (DXVK) under Preferences > Camera > Use DXVK (Vulkan) renderer.</li>"
-          "<li>Use the Windows file dialogs under Preferences > System > Use Windows file dialogs.</li>"
-          "<li>Preferences stays open while you keep working in Radiant.</li>"
-          "<li>Show Radiant on your Discord profile, optionally with the open map, under Preferences > System > Discord presence.</li></ul></li></ul>" },
+          "<li>FX Browser is overhauled to display previews of each effect, mirroring the Models and Textures windows. Toggle Legacy on the bottom left to revert it back to the original.</li>"
+          "<li>Selected models now show as an outline instead of the wireframe. Can be toggled with Alt+J or View > Toggle Model Outline.</li>"
+          "<li>Icon Size sliders no longer cause lag in the Models, Textures and FX Browser windows, and the icons resize as you drag.</li>"
+          "<li>The color dialog takes hex, 0-1 and Kelvin values, copies the color and keeps your recent colors.</li>"
+          "<li>Auto LODs match the ones Launcher+ builds.</li>"
+          "<li>The rotation gizmo now lines up correctly in game view.</li>"
+          "<li>Fixed issue where camera view would have artifacts on graphics cards with low video memory.</li></ul>" },
         { "TeamCreate", MODTOOLS_APP_RADIANT,
-          "<b>Team Create</b> (Ctrl+Shift+T)<br>Map with your friends! Have one user host and others can join. "
-          "View edits in real time and stream assets over to other users." },
-        { "PlayTest", MODTOOLS_APP_RADIANT,
-          "<b>Play Test</b><br>Play your maps inside of Radiant. See changes in real time (requires BO3 Enhanced). "
-          "Works with Team Create to play with your friends! Fly and God boxes, and only what changed is rebuilt so starting is quick." },
+          "<b>Team Create</b> (Ctrl+Shift+T)<ul>"
+          "<li>Assets already in the map now stream to everyone who joins, even on big maps.</li>"
+          "<li>Join Host waits while the host reads a big build for the first time instead of giving up.</li></ul>" },
+        { "PlayTest", MODTOOLS_APP_RADIANT, "" },
         { "APEPlus", MODTOOLS_APP_APE,
           "<b>APE+</b><ul>"
           "<li>Speed<ul>"
-          "<li>Searching for assets is much faster, even with a large GDT library.</li>"
-          "<li>Assets open faster and does not lag when changing a value.</li></ul></li>"
+          "<li>No more freeze when opening the first material after APE starts.</li>"
+          "<li>XModel Info is much faster on big models.</li></ul></li>"
           "<li>Editing<ul>"
-          "<li>More values and cleaner property layouts for bullet, projectile and dual wield weapons and weapon camos.</li>"
-          "<li>Supports the JPEG file type for images.</li>"
-          "<li>Log actions box in the Output pane's title bar shows what you changed.</li></ul></li>"
-          "<li>Look<ul>"
-          "<li>Themes under View > Preferences > Theme.</li>"
-          "<li>More lighting/skybox options in the Preview window.</li>"
-          "<li>Show APE on your Discord profile, optionally with the open asset, under View > Preferences > Discord presence.</li></ul></li></ul>" },
+          "<li>Sound notetracks play in the Preview window, and alias file edits are picked up live.</li>"
+          "<li>Viewmodel animations no longer look stretched in the Preview window.</li>"
+          "<li>Select Color takes hex, 0-1 and Kelvin values and copies the color.</li>"
+          "<li>Previewed auto LODs match the ones Launcher+ builds.</li></ul></li></ul>" },
         { "LauncherPlus", MODTOOLS_APP_LAUNCHER,
           "<b>Launcher+</b><ul>"
-          "<li>Builds<ul>"
-          "<li>Faster compile, light and link times with BetterBuild</li>"
-          "<li>Pick Draft in the Light quality box for a fast bake.</li></ul></li>"
-          "<li>Look and publishing<ul>"
-          "<li>Themes under Edit > Options > Theme.</li>"
-          "<li>Publish Mod checks the thumbnail against Steam's rules and keeps the in-game Map Description apart from the Workshop description.</li>"
-          "<li>Show the launcher on your Discord profile, optionally with the build step, under Edit > Options > Discord presence.</li></ul></li></ul>" },
+          "<li>Better auto LODs, made much faster and keeping their shape.</li>"
+          "<li>Auto LODs for models over the stock 220,000-face limit.</li>"
+          "<li>Starting the mod tools from Steam no longer leaves a cmd window open.</li></ul>" },
     };
 
     void* g_whatsNew = nullptr;          // QDialog, built on first use, hidden between uses
@@ -475,10 +450,8 @@ namespace
                      + (c.text.empty() ? "" : ": " + Escape(c.text)) + "</li>";
             h += "</ul>";
         }
-        h += std::string("<p>What the plugins add to ") + where + ", and where to find it.</p>";
-        h += "<p><b>Plugins</b> (Ctrl+Shift+P)<br>Switch plugins on and off, install other people's plugins from Browse plugins, "
-             "and Report a problem... collects the logs and crash dumps for a bug report. If an editor stops while starting two times in a row, "
-             "it offers to start without plugins. About MTPlugins... shows the version, the license and the project's links.</p>";
+        h += std::string("<p>What is new in the plugins for ") + where + ".</p>";
+        h += "<p><b>Plugins</b> (Ctrl+Shift+P)<br>Search your plugins, and get asked when one you installed from Browse plugins has an update.</p>";
         auto noteOf = [](ModToolsPlugin* p) -> const Note* {
             for (const Note& n : kNotes) if (_stricmp(n.plugin, p->name.c_str()) == 0 && (n.apps & app::ApiId())) return &n;
             return nullptr;
@@ -486,7 +459,7 @@ namespace
         int shown = 0;
         for (const Note& n : kNotes)              // ours first, in kNotes order
             for (ModToolsPlugin* p : plugins::All())
-                if (p->state == ModToolsPlugin::Loaded && noteOf(p) == &n) { h += std::string("<p>") + n.html + "</p>"; ++shown; }
+                if (p->state == ModToolsPlugin::Loaded && noteOf(p) == &n && *n.html) { h += std::string("<p>") + n.html + "</p>"; ++shown; }
         for (ModToolsPlugin* p : plugins::All())   // then everyone else's, with their own description
         {
             if (p->state != ModToolsPlugin::Loaded || noteOf(p)) continue;
@@ -494,7 +467,7 @@ namespace
                  + (p->description.empty() ? "" : ": " + Escape(p->description)) + "</p>";
             ++shown;
         }
-        if (!shown) h += "<p>No plugins are loaded here right now.</p>";
+        if (!shown) h += "<p>Nothing new in the plugins loaded here.</p>";
         h += "<p>Open this again from Plugins > What's new.</p>";
         return h;
     }

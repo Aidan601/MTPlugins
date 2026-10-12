@@ -111,7 +111,10 @@ namespace assetfiles
             auto p = Under(root, path); auto stamp = fs::last_write_time(p);
             auto it = gdts.find(path);
             if (it == gdts.end() || it->second.stamp != stamp)
-                gdts[path] = {stamp, Parse(Read(p, 64 * 1024 * 1024))};
+            {
+                try { gdts[path] = {stamp, Parse(Read(p, 64 * 1024 * 1024))}; }
+                catch (const std::exception& e) { throw std::runtime_error(std::string(e.what()) + " in " + path); }   // names the file to repair
+            }
             return gdts.at(path).blocks;
         }
         bool Definition(const std::string& id, Block& b, std::string& gdt, std::set<std::string>& parents)

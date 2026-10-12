@@ -9,7 +9,7 @@ namespace render
 {
     enum class View { None, Cam, XY };
 
-    struct CamParams { float origin[3]; float angles[3]; int width, height; bool gameView; float fovDeg; };   // fovDeg: Radiant's Cam_GetFov at that draw, 0 = unknown
+    struct CamParams { float origin[3]; float angles[3]; int width, height; bool gameView; bool probeView; float fovDeg; };   // gameView includes probe view, fovDeg: Radiant's Cam_GetFov at that draw, 0 = unknown
     struct XYParams  { int type; float origin[3]; float scale; };      // type: 2 = XY top, 1 = XZ front, 0 = YZ side
 
     bool Init();

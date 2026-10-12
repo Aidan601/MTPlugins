@@ -2445,11 +2445,21 @@ namespace render
 
     // Radiant keeps the VERTICAL field of view fixed and lets the horizontal one follow the pane's aspect:
     //   editor view: "Fov" pref (default 100) = horizontal FOV of a 16:9 view, GAME VIEW: cg_fov (65) = horizontal FOV of a 4:3 view
-    // focal = (paneH / 2) / tan(vfov / 2), tan(vfov / 2) = tan(hfov / 2) * (9/16 or 3/4). Cam_GetFov's live value (c.fovDeg) wins, the ini numbers are the fallback.
+    // tan(vfov / 2) = tan(hfov / 2) * (9/16 or 3/4). Cam_GetFov's live value (c.fovDeg) wins, the ini numbers are the fallback.
     float TanHalfVertical(const CamParams& c)
     {
         if (c.fovDeg > 1.0f && c.fovDeg < 179.0f) return tanf(c.fovDeg * 0.5f * kDeg) * (9.0f / 16.0f);
         return c.gameView ? tanf(Cfg().gameFov * 0.5f * kDeg) * 0.75f : tanf(Cfg().fovDegrees * 0.5f * kDeg) * (9.0f / 16.0f);
+    }
+
+    // Game view draws its 16:9 lens into a centred 16k x 9k rect, probe view its 90/90 lens into a square (Radiant's fit 0x140F00000).
+    float CamFocal(const CamParams& c)
+    {
+        const float w = float(c.width), h = float(c.height);
+        if (c.probeView) return (w < h ? w : h) * 0.5f;
+        if (!c.gameView) return h * 0.5f / TanHalfVertical(c);
+        const int k = w <= 16.0f / 9.0f * h ? int(w / 16.0f) : int(h / 9.0f);
+        return float(9 * k) * 0.5f / TanHalfVertical(c);
     }
 
     bool ProjectCam(const CamParams& c, const float p[3], float& sx, float& sy)
@@ -2461,9 +2471,8 @@ namespace render
         if (z < 1.0f) return false;
         float x = d[0] * r[0] + d[1] * r[1] + d[2] * r[2];
         float y = d[0] * u[0] + d[1] * u[1] + d[2] * u[2];
-        float paneW = float(c.width), paneH = float(c.height);
-        float cx = paneW * 0.5f, cy = paneH * 0.5f;
-        float focal = (paneH * 0.5f) / TanHalfVertical(c);
+        float cx = float(c.width) * 0.5f, cy = float(c.height) * 0.5f;
+        float focal = CamFocal(c);
         sx = cx + x / z * focal;
         sy = cy - y / z * focal;
         return true;

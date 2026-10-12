@@ -3,6 +3,7 @@
 // is always whole, and one full frame is drawn when the interaction stops.
 #include "modtools_plugin.hpp"
 #include "xylod.h"
+#include "fxpreview.h"
 #include <windows.h>
 #include <intrin.h>
 #include <cmath>
@@ -161,6 +162,7 @@ namespace
 
     __int64 __fastcall hk_ForEach(void* collection, void* function)
     {
+        if (br::fxpreview::HidingMapHelpers()) return 1;     // FX window frames: no entity helpers or selection
         if (!t_on || collection != g_selected) return g_oForEach(collection, function);
         ++t_selected;
         const __int64 r = g_oForEach(collection, function);

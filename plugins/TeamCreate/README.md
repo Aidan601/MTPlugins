@@ -19,7 +19,7 @@ Open the Team Create pane with Ctrl+Shift+T or the Team Create menu.
 - Cameras and selections: everyone's camera and selection show in your 2D and 3D views in their player color.
 - Join takes you to the host's map, and makes a temporary copy if you do not have it.
 - Prefabs: edits inside prefabs are shared, and prefabs the host uses are fetched for you.
-- Custom assets: models, materials and images the host uses are streamed to the joiners. At the end of a session you can keep them.
+- Custom assets: models, materials and images the host uses are streamed to the joiners. At the end of a session a short box counts them by type and lets you keep them.
 - Chat in the pane, with recent messages in the 3D view.
 - Sync saves: your save makes the others save too (optional box).
 - Sync light builds: a light build starts the same build on the other PCs (optional box).

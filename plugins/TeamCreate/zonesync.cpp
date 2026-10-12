@@ -15,6 +15,7 @@
 #include <chrono>
 #include <vector>
 #include <map>
+#include <set>
 #include <unordered_map>
 #include <string>
 #include <cstdio>
@@ -31,7 +32,7 @@ namespace
     namespace fs = std::filesystem;
     constexpr uint32_t kBlock = 1u << 20;
     constexpr size_t kWindow = 4, kDirectWindow = 8;        // requests in flight on the session, on the direct link
-    constexpr ULONGLONG kStallMs = 45000, kDirectStallMs = 15000, kManifestWaitMs = 90000, kRebuildWaitMs = 600000;
+    constexpr ULONGLONG kStallMs = 45000, kDirectStallMs = 15000, kManifestWaitMs = 90000, kRebuildWaitMs = 1800000;
     constexpr size_t kHash = 16;
     using Hash = std::array<uint8_t, kHash>;
 
@@ -294,8 +295,17 @@ namespace
     std::mutex g_hostMutex;
     std::condition_variable g_hostCv;
     std::deque<std::pair<uint32_t, std::string>> g_hostJobs;
+    bool g_hostHashing = false;                                 // a job runs (under g_hostMutex)
+    std::set<std::pair<uint32_t, std::string>> g_busyTold;      // peers told to ask again, once per job (under g_hostMutex)
     std::thread g_hostThread;
     std::atomic<bool> g_quit{ false };
+
+    // ok=0 + busy=1: the client asks again in 5 s (a first hash of a 10 GB build takes minutes, the client gives up after 90 s)
+    void SendBusy(uint32_t peer, const std::string& map, const std::string& why)
+    {
+        net::Writer w; w.str(map); w.u8(0); w.str(why); w.u32(kBlock); w.u16(0); w.u8(1);
+        net::SendTo(peer, net::MSG_ZONE_MANIFEST2, w.buf);
+    }
 
     void ServeManifest2(uint32_t peer, const std::string& map)
     {
@@ -338,9 +348,11 @@ namespace
                 std::unique_lock<std::mutex> lock(g_hostMutex);
                 g_hostCv.wait(lock, [] { return g_quit || !g_hostJobs.empty(); });
                 if (g_quit) return;
-                job = g_hostJobs.front(); g_hostJobs.pop_front();
+                job = g_hostJobs.front(); g_hostJobs.pop_front(); g_hostHashing = true;
             }
             try { ServeManifest2(job.first, job.second); } catch (...) { LOG("zonesync: the manifest for %s failed (exception)", job.second.c_str()); }
+            std::lock_guard<std::mutex> lock(g_hostMutex);
+            g_hostHashing = false; g_busyTold.clear();
         }
     }
     void QueueManifest(uint32_t peer, const std::string& map)
@@ -642,7 +654,7 @@ namespace
                 if (GetTickCount64() - start > kManifestWaitMs)
                 {
                     lock.unlock();
-                    Finish(FAILED, "the host did not answer: its Team Create is older than this one (both PCs need the same update), or it left");
+                    Finish(FAILED, "the host did not answer within 90 s: it left, or its Team Create is older than this one (both PCs need the same update)");
                     return Got::Failed;
                 }
                 g_cv.wait_for(lock, std::chrono::milliseconds(500));
@@ -748,7 +760,7 @@ namespace
             if (GetTickCount64() - waitingSince > kRebuildWaitMs)
             {
                 lock.unlock();
-                Finish(FAILED, "the host kept linking the map: press Join Host again when its game is up");
+                Finish(FAILED, "the host stayed busy (linking or reading its build) for 30 min: press Join Host again later");
                 return;
             }
             g_state = ASKING; g_haveManifest = false; g_manifest.clear(); g_pieces.clear(); g_fetched = 0;
@@ -894,6 +906,16 @@ namespace zonesync
                 // a client that dials direct links gets the port opened and the offer before its file list
                 const uint8_t caps = r.u8();
                 if (r.ok && (caps & 1) && rp::ConfigGetBool("direct", "enabled", true)) { direct::HostEnsure(ServeDirect, SendOffer); direct::HostAsk(m.from); }
+                {
+                    // the worker hashes one build at a time: a request during a hash is answered busy, the client asks again
+                    std::lock_guard<std::mutex> lock(g_hostMutex);
+                    if (g_hostHashing || !g_hostJobs.empty())
+                    {
+                        if (g_busyTold.insert({ m.from, map }).second) LOG("zonesync: peer %u asked for %s while a build is being read: told to ask again", m.from, map.c_str());
+                        SendBusy(m.from, map, "the host is still reading its build's files (once per build)");
+                        return;
+                    }
+                }
                 QueueManifest(m.from, map);
             }
             else if (m.type == net::MSG_ZONE_GET) ServeChunk(m.from, r, map);
@@ -992,7 +1014,7 @@ namespace zonesync
         char buf[512];
         const unsigned long long waited = (unsigned long long)((GetTickCount64() - g_startedAt) / 1000);
         if (g_state == ASKING)
-            snprintf(buf, sizeof buf, "ASKING the host for its build of %s (%llu s; %s)", g_map.c_str(), waited, g_manifestBusy ? "the host is linking, waiting for it" : "it reads its files once per build");
+            snprintf(buf, sizeof buf, "ASKING the host for its build of %s (%llu s; %s)", g_map.c_str(), waited, g_manifestBusy ? (g_manifestError.empty() ? "the host is busy, waiting for it" : g_manifestError.c_str()) : "it reads its files once per build");
         else if (g_state == FETCHING)
             snprintf(buf, sizeof buf, "FETCHING%s file %zu/%zu, %.1f/%.1f MB from the host, %.1f MB already on this PC, %.1f MB/s%s", g_background ? " (background)" : "",
                      g_fileNo, g_fileCount, g_fetched / 1048576.0, g_fetchTotal / 1048576.0, g_reused / 1048576.0, g_rate, g_ds != direct::kNoSock && !g_dDead ? " over the direct link" : "");

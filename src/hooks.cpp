@@ -7,6 +7,8 @@
 #include <atomic>
 #include <array>
 #include <cstring>
+#include <cmath>
+#include <cstdint>
 #include "MinHook.h"
 #include "hooks.h"
 #include "radiant_addrs.h"
@@ -39,9 +41,9 @@
 //     selection ............... GetSelection, SelectedBrushPtrs, SelectBrushes, SelectEntityByGuid, DeselectAll,
 //                               GuidText
 //     brush access ............ MoveBrush, FindBrushesByGuid, FindEntitiesByGuid, ParseGuidText, FaceWalk,
-//                               BrushPlanes, SetBrushPlanes, BrushBounds, EntityFixedSize, FindBrushInst
-//     patch vertices .......... PatchBrushByGuid, PatchGrid, PatchSelectVerts, PatchSelectedVertCount, PatchWeldSelected,
-//                               DragMode (file end, PatchViewSeh, ConnectSeh)
+//                               BrushPlanes, SetBrushPlanes, CommitBrushGeometry, BrushBounds, EntityFixedSize, FindBrushInst
+//     patch vertices .......... PatchBrushByGuid, PatchGrid, PatchSetGrid (BuildPatchRenderAttrs, SafePatchControlGrid),
+//                               PatchSelectVerts, PatchSelectedVertCount, PatchWeldSelected, DragMode (file end, PatchViewSeh, ConnectSeh)
 //     entity walk / text ...... ForEachEntity, ForEachEntityBrush, EntityGuid, BrushGuid, BrushOwner, WorldEntity,
 //                               WriteEntityText, WriteEntityTextWith
 //     prefabs ................. EnterSelectedPrefab, LeavePrefab
@@ -103,6 +105,7 @@ namespace
     std::mutex   g_mutex;
     std::wstring g_currentMap;
     bool         g_reloading = false;    // our own reload in flight
+    int          g_mapLoadDepth = 0;     // main thread: inside Map_LoadFile
     bool         g_maximizedOnce = false;
     std::atomic<int> g_ownWriteDepth{ 0 };
     ULONGLONG    g_ownWriteEndTick = 0;
@@ -596,7 +599,9 @@ namespace
         LOG("hook: Map_LoadFile('%s')", filename ? filename : "(null)");
         init::BeforeMapLoad();     // a command-line map loads before the main window shows
         OnMapLoading(filename);
+        ++g_mapLoadDepth;
         __int64 r = o_Map_LoadFile(filename);
+        --g_mapLoadDepth;
         OnMapLoaded(filename);
         // saved geometry is applied by now
         if (Cfg().maximize && !g_maximizedOnce) { g_maximizedOnce = true; hooks::MaximizeMainWindow(); }
@@ -659,6 +664,7 @@ namespace
         p.width = *reinterpret_cast<int*>(camWnd + rt::off_CamWnd_Width);
         p.height = *reinterpret_cast<int*>(camWnd + rt::off_CamWnd_Height);
         p.gameView = *Global<char>(rt::g_gameView) != 0 || *Global<char>(rt::g_probeView) != 0;
+        p.probeView = *Global<char>(rt::g_probeView) != 0;
         p.fovDeg = Func<float(__fastcall*)()>(rt::Cam_GetFov)();   // what this draw projects with
         render::BeginCamView(p);
         uint64_t begin = PerfBegin();
@@ -952,12 +958,28 @@ namespace hooks
         if (flag && *flag == 0) *flag = 1;
     }
 
+    static bool RefreshMovedPatchMesh(RadPtr brush)
+    {
+        if (!brush) return false;
+        __try
+        {
+            BYTE* patch = *reinterpret_cast<BYTE**>(brush + rt::off_Brush_Patch);
+            if (!patch) return true;
+            using Rebuild_t = __int64(__fastcall*)(void*);
+            Func<Rebuild_t>(rt::Patch_RebuildMesh)(patch);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+
     bool MoveBrush(RadPtr brush, const float delta[3])
     {
         if (!brush || !delta || !rt::VerifyBinary()) return false;
         if (delta[0] == 0.0f && delta[1] == 0.0f && delta[2] == 0.0f) return true;
         using BrushMove_t = __int64(__fastcall*)(void* brush, const float* delta, unsigned char snap, unsigned char markModified);
         Func<BrushMove_t>(rt::Brush_Move)(brush, delta, 0, 0);
+        if (!RefreshMovedPatchMesh(brush))
+            LOG("hook: could not refresh moved patch render mesh for brush %p", brush);
         return true;
     }
 
@@ -1055,6 +1077,33 @@ namespace hooks
         return true;
     }
 
+    static const char* InternLabel(const char* label);
+
+    bool CommitBrushGeometry(RadPtr brush, const float* pts, size_t nFaces, const float delta[3], const char* undoLabel)
+    {
+        if (!brush || (!pts && !delta) || !rt::VerifyBinary()) return false;
+        const bool setPlanes = pts && nFaces;
+        if (!setPlanes && !delta) return false;
+
+        using IsOpen_t = bool(__fastcall*)();
+        const bool joinedOpenOperation = Func<IsOpen_t>(rt::Undo_IsOpen)();
+        void* selection = Global<void>(rt::g_selectedBrushes);
+        if (!joinedOpenOperation)
+        {
+            Func<UndoBegin_t>(rt::Undo_Begin)(InternLabel(undoLabel));
+            Func<Collection1_t>(rt::Undo_AddBrushList)(selection);
+        }
+
+        const bool updated = setPlanes ? SetBrushPlanes(brush, pts, nFaces) : MoveBrush(brush, delta);
+        if (updated) MarkMapModified();
+        if (!joinedOpenOperation)
+        {
+            Func<Collection1_t>(rt::Selection_CloseUndo)(selection);
+            Func<Void_t>(rt::Undo_End)();
+        }
+        return updated;
+    }
+
     bool EntityFixedSize(RadPtr ent)
     {
         if (!ent || !rt::VerifyBinary()) return false;
@@ -1150,6 +1199,7 @@ namespace hooks
     }
 
     bool IsReloading() { return g_reloading; }
+    bool InMapLoad() { return g_mapLoadDepth > 0; }
     bool MouseButtonHeld() { return ((GetAsyncKeyState(VK_LBUTTON) | GetAsyncKeyState(VK_RBUTTON) | GetAsyncKeyState(VK_MBUTTON)) & 0x8000) != 0; }
 
     void ForEachEntity(const std::function<void(RadPtr)>& fn)
@@ -1613,6 +1663,127 @@ namespace hooks
     {
         constexpr int kMaxPatchSide = 4096;
         constexpr int kMaxPatchVertSel = 1024;   // Radiant's patch connect stops at 1025
+        constexpr size_t kPatchCtrlStride = 92;
+        constexpr size_t kPatchCtrlUvOffset = 12;
+        constexpr size_t kPatchCtrlColorOffset = 48;
+
+        using PatchCtrlRecord = std::array<uint8_t, kPatchCtrlStride>;
+        struct PatchRenderAttrs
+        {
+            float uv[6]{};
+            float color[4]{};
+        };
+
+        float PatchAttrValue(const std::vector<PatchCtrlRecord>& source, int cols,
+            int rowSegment, int colSegment, float u, float v, int channel)
+        {
+            const float bu[3] = { (1.0f - u) * (1.0f - u), 2.0f * u * (1.0f - u), u * u };
+            const float bv[3] = { (1.0f - v) * (1.0f - v), 2.0f * v * (1.0f - v), v * v };
+            float value = 0.0f;
+            for (int r = 0; r < 3; ++r)
+                for (int c = 0; c < 3; ++c)
+                {
+                    const size_t index = static_cast<size_t>((rowSegment * 2 + r) * cols + colSegment * 2 + c);
+                    float component = 0.0f;
+                    if (channel < 6)
+                        memcpy(&component, source[index].data() + kPatchCtrlUvOffset + channel * sizeof(float), sizeof(component));
+                    else
+                        memcpy(&component, source[index].data() + kPatchCtrlColorOffset + (channel - 6) * sizeof(float), sizeof(component));
+                    value += component * bu[r] * bv[c];
+                }
+            return value;
+        }
+
+        bool BuildPatchRenderAttrs(const std::vector<PatchCtrlRecord>& source, int sourceRows, int sourceCols,
+            int outputRows, int outputCols, const float* outputXyz, int outputPointCount,
+            std::vector<PatchRenderAttrs>& output)
+        {
+            if (sourceRows < 3 || sourceCols < 3 || !(sourceRows & 1) || !(sourceCols & 1) ||
+                outputRows < 3 || outputCols < 3 || !(outputRows & 1) || !(outputCols & 1) ||
+                source.size() != static_cast<size_t>(sourceRows) * sourceCols || !outputXyz ||
+                outputPointCount != outputRows * outputCols) return false;
+
+            const int sourceRowSegments = (sourceRows - 1) / 2;
+            const int sourceColSegments = (sourceCols - 1) / 2;
+            const int outputRowSegments = (outputRows - 1) / 2;
+            const int outputColSegments = (outputCols - 1) / 2;
+            const size_t outputCount = static_cast<size_t>(outputRows) * outputCols;
+            std::vector<std::array<float, 10>> accumulated(outputCount);
+            std::vector<uint32_t> contributions(outputCount, 0);
+            const float inverse[3][3] = { { 1.0f, 0.0f, 0.0f }, { -0.5f, 2.0f, -0.5f }, { 0.0f, 0.0f, 1.0f } };
+
+            for (int sr = 0; sr < outputRowSegments; ++sr)
+                for (int sc = 0; sc < outputColSegments; ++sc)
+                {
+                    const float uStep = static_cast<float>(sourceRowSegments) / outputRowSegments;
+                    const float vStep = static_cast<float>(sourceColSegments) / outputColSegments;
+                    const float us[3] = { sr * uStep, (sr + 0.5f) * uStep, (sr + 1.0f) * uStep };
+                    const float vs[3] = { sc * vStep, (sc + 0.5f) * vStep, (sc + 1.0f) * vStep };
+                    float samples[3][3][10]{};
+                    for (int r = 0; r < 3; ++r)
+                        for (int c = 0; c < 3; ++c)
+                        {
+                            const int sourceRowSegment = (std::min)(static_cast<int>(us[r]), sourceRowSegments - 1);
+                            const int sourceColSegment = (std::min)(static_cast<int>(vs[c]), sourceColSegments - 1);
+                            const float localU = us[r] >= sourceRowSegments ? 1.0f : us[r] - sourceRowSegment;
+                            const float localV = vs[c] >= sourceColSegments ? 1.0f : vs[c] - sourceColSegment;
+                            for (int channel = 0; channel < 10; ++channel)
+                                samples[r][c][channel] = PatchAttrValue(source, sourceCols,
+                                    sourceRowSegment, sourceColSegment, localU, localV, channel);
+                        }
+
+                    for (int cr = 0; cr < 3; ++cr)
+                        for (int cc = 0; cc < 3; ++cc)
+                        {
+                            const size_t index = static_cast<size_t>((sr * 2 + cr) * outputCols + sc * 2 + cc);
+                            for (int channel = 0; channel < 10; ++channel)
+                            {
+                                float value = 0.0f;
+                                for (int r = 0; r < 3; ++r)
+                                    for (int c = 0; c < 3; ++c)
+                                        value += samples[r][c][channel] * inverse[cr][r] * inverse[cc][c];
+                                accumulated[index][channel] += value;
+                            }
+                            ++contributions[index];
+                        }
+                }
+
+            output.resize(outputCount);
+            for (size_t i = 0; i < outputCount; ++i)
+            {
+                if (!contributions[i]) return false;
+                for (int channel = 0; channel < 10; ++channel)
+                {
+                    const float value = accumulated[i][channel] / contributions[i];
+                    if (!std::isfinite(value)) return false;
+                    if (channel < 6) output[i].uv[channel] = value;
+                    else output[i].color[channel - 6] = value;
+                }
+            }
+
+            return true;
+        }
+
+        RadPtr FindBrushInstForPatch(RadPtr brush)
+        {
+            if (RadPtr instance = FindBrushInst(brush)) return instance;
+            for (RadPtr selected : SelectedBrushPtrs())
+                if (BrushOfInst(selected) == brush) return selected;
+            return nullptr;
+        }
+
+        void RefreshPatchInstanceBounds(RadPtr brush)
+        {
+            RadPtr instance = FindBrushInstForPatch(brush);
+            if (!instance) return;
+            __try
+            {
+                memcpy(instance + rt::off_BInst_CullMins, brush + rt::off_Brush_PaddedMins, sizeof(float) * 3);
+                memcpy(instance + rt::off_BInst_CullMaxs, brush + rt::off_Brush_PaddedMaxs, sizeof(float) * 3);
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER) {}
+        }
+
 
         struct PatchView { BYTE* ctrl; int rows; int cols; };
         bool PatchViewSeh(const BYTE* brush, PatchView* out)
@@ -1639,6 +1810,99 @@ namespace hooks
             using Connect_t = void(__fastcall*)(char);
             __try { Func<Connect_t>(rt::Patch_ConnectVerts)(0); return true; }
             __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+        }
+
+        bool ResizePatchSeh(RadPtr patch, int rows, int cols)
+        {
+            using Resize_t = void(__fastcall*)(void*, int, int);
+            __try { Func<Resize_t>(rt::Patch_Resize)(patch, rows, cols); return true; }
+            __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+        }
+
+        bool BuildPatchSeh(RadPtr brush)
+        {
+            using Build_t = void(__fastcall*)(void*, unsigned char, unsigned char, unsigned);
+            __try { Func<Build_t>(rt::Brush_Build)(brush, 0, 1, 0); return true; }
+            __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+        }
+
+        bool RebuildPatchMeshSeh(BYTE* patch)
+        {
+            using Rebuild_t = __int64(__fastcall*)(void*);
+            __try { Func<Rebuild_t>(rt::Patch_RebuildMesh)(patch); return true; }
+            __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+        }
+
+        bool SafePatchControlGrid(int rows, int cols, const float* xyz, int count)
+        {
+            if (!xyz || rows < 3 || cols < 3 || !(rows & 1) || !(cols & 1) ||
+                rows > kMaxPatchSide || cols > kMaxPatchSide ||
+                static_cast<int64_t>(rows) * cols != count || count > 5450) return false;
+            constexpr double kCoordinateLimit = 131072.0;
+            for (int i = 0; i < count * 3; ++i)
+                if (!std::isfinite(xyz[i]) || std::fabs(static_cast<double>(xyz[i])) > kCoordinateLimit) return false;
+
+            for (int row = 0; row + 2 < rows; row += 2)
+                for (int col = 0; col + 2 < cols; col += 2)
+                {
+                    double p[3][3][3]{};
+                    double span = 0.0;
+                    for (int r = 0; r < 3; ++r)
+                        for (int c = 0; c < 3; ++c)
+                        {
+                            const int index = ((row + r) * cols + col + c) * 3;
+                            for (int axis = 0; axis < 3; ++axis) p[r][c][axis] = xyz[index + axis];
+                        }
+                    for (int r = 0; r < 3; ++r)
+                        for (int c = 0; c < 3; ++c)
+                        {
+                            if (r < 2)
+                            {
+                                double d2 = 0;
+                                for (int axis = 0; axis < 3; ++axis)
+                                {
+                                    const double d = p[r + 1][c][axis] - p[r][c][axis];
+                                    d2 += d * d;
+                                }
+                                span = (std::max)(span, std::sqrt(d2));
+                            }
+                            if (c < 2)
+                            {
+                                double d2 = 0;
+                                for (int axis = 0; axis < 3; ++axis)
+                                {
+                                    const double d = p[r][c + 1][axis] - p[r][c][axis];
+                                    d2 += d * d;
+                                }
+                                span = (std::max)(span, std::sqrt(d2));
+                            }
+                        }
+                    if (!std::isfinite(span) || span <= 1.0e-6 || span > kCoordinateLimit) return false;
+                    const double minArea = (std::max)(1.0e-10, span * span * 1.0e-7);
+                    for (int su = 1; su < 20; ++su)
+                        for (int sv = 1; sv < 20; ++sv)
+                        {
+                            const double u = su / 20.0, v = sv / 20.0;
+                            const double bu[3] = { (1.0 - u) * (1.0 - u), 2.0 * u * (1.0 - u), u * u };
+                            const double bv[3] = { (1.0 - v) * (1.0 - v), 2.0 * v * (1.0 - v), v * v };
+                            const double du[3] = { -2.0 * (1.0 - u), 2.0 - 4.0 * u, 2.0 * u };
+                            const double dv[3] = { -2.0 * (1.0 - v), 2.0 - 4.0 * v, 2.0 * v };
+                            double tangentU[3]{}, tangentV[3]{};
+                            for (int r = 0; r < 3; ++r)
+                                for (int c = 0; c < 3; ++c)
+                                    for (int axis = 0; axis < 3; ++axis)
+                                    {
+                                        tangentU[axis] += p[r][c][axis] * du[r] * bv[c];
+                                        tangentV[axis] += p[r][c][axis] * bu[r] * dv[c];
+                                    }
+                            const double crossX = tangentU[1] * tangentV[2] - tangentU[2] * tangentV[1];
+                            const double crossY = tangentU[2] * tangentV[0] - tangentU[0] * tangentV[2];
+                            const double crossZ = tangentU[0] * tangentV[1] - tangentU[1] * tangentV[0];
+                            const double area = std::sqrt(crossX * crossX + crossY * crossY + crossZ * crossZ);
+                            if (!std::isfinite(area) || area <= minArea) return false;
+                        }
+                }
+            return true;
         }
     }
 
@@ -1667,6 +1931,55 @@ namespace hooks
         int n = v.rows * v.cols;
         for (int i = 0; xyz && i < n && i < cap; ++i) memcpy(xyz + 3 * i, v.ctrl + size_t(i) * rt::sz_PatchCtrl, 3 * sizeof(float));
         return n;
+    }
+
+    bool PatchSetGrid(RadPtr brush, int rows, int cols, const float* xyz, int count)
+    {
+        if (!brush || !SafePatchControlGrid(rows, cols, xyz, count) || !rt::VerifyBinary()) return false;
+
+        PatchView view;
+        if (!PatchView_(brush, view)) return false;
+        if (PatchSelectedVertCount() > 0) PatchSelectVerts({});
+        if (view.rows != rows || view.cols != cols)
+        {
+            const int sourceRows = view.rows;
+            const int sourceCols = view.cols;
+            const size_t sourceCount = static_cast<size_t>(sourceRows) * sourceCols;
+            std::vector<PatchCtrlRecord> source(sourceCount);
+            for (size_t i = 0; i < sourceCount; ++i)
+                memcpy(source[i].data(), view.ctrl + i * rt::sz_PatchCtrl, kPatchCtrlStride);
+            std::vector<PatchRenderAttrs> attrs;
+            if (!BuildPatchRenderAttrs(source, sourceRows, sourceCols, rows, cols, xyz, count, attrs)) return false;
+
+            BYTE* patch = *reinterpret_cast<BYTE**>(brush + rt::off_Brush_Patch);
+            if (!patch || !ResizePatchSeh(patch, rows, cols) || !PatchView_(brush, view) || view.rows != rows || view.cols != cols)
+                return false;
+
+            for (int row = 0; row < rows; ++row)
+                for (int col = 0; col < cols; ++col)
+                {
+                    const int sourceRow = static_cast<int>(std::lround(
+                        static_cast<double>(row) * (sourceRows - 1) / (rows - 1)));
+                    const int sourceCol = static_cast<int>(std::lround(
+                        static_cast<double>(col) * (sourceCols - 1) / (cols - 1)));
+                    const size_t sourceIndex = static_cast<size_t>(sourceRow) * sourceCols + sourceCol;
+                    const size_t outputIndex = static_cast<size_t>(row) * cols + col;
+                    BYTE* destination = view.ctrl + outputIndex * rt::sz_PatchCtrl;
+                    memcpy(destination, source[sourceIndex].data(), kPatchCtrlStride);
+                    memcpy(destination + kPatchCtrlUvOffset, attrs[outputIndex].uv, sizeof(attrs[outputIndex].uv));
+                    memcpy(destination + kPatchCtrlColorOffset, attrs[outputIndex].color, sizeof(attrs[outputIndex].color));
+                }
+        }
+
+        for (int i = 0; i < count; ++i)
+            memcpy(view.ctrl + size_t(i) * rt::sz_PatchCtrl, xyz + size_t(i) * 3, 3 * sizeof(float));
+        if (!BuildPatchSeh(brush)) return false;
+        BYTE* patch = *reinterpret_cast<BYTE**>(brush + rt::off_Brush_Patch);
+        if (!patch || !RebuildPatchMeshSeh(patch)) return false;
+        RefreshPatchInstanceBounds(brush);
+        MarkMapModified();
+        RequestRedraw(rt::kRedraw3D | rt::kRedraw2D);
+        return true;
     }
 
     int PatchSelectVerts(const std::vector<std::pair<RadPtr, int>>& refs)

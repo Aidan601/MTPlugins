@@ -22,7 +22,7 @@ Visual Studio 2026 (v145 toolset), x64. Run `build.bat` (Release by default); ou
 
 ## Finding more plugins
 
-In the Plugins window, **Browse plugins** lists every plugin in the public plugin list, including other people's, and installs or updates one with a click. Each file is checked against the SHA-256 in the list before it is installed. To add your own plugin to the list, see [MTPlugins-Index](https://github.com/Aidan601/MTPlugins-Index).
+In the Plugins window, **Browse plugins** lists every plugin in the public plugin list, including other people's, and installs or updates one with a click. The Search plugins box filters both lists, and each editor asks at start when a plugin you installed has an update (Plugins > Check for updates... asks right away). Each file is checked against the SHA-256 in the list before it is installed. To add your own plugin to the list, see [MTPlugins-Index](https://github.com/Aidan601/MTPlugins-Index).
 
 ## Writing a plugin
 

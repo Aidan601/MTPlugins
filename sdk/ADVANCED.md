@@ -164,6 +164,21 @@ For plugins that apply other people's edits or preview geometry, the host has a 
 - `PatchWeldVerts` goes through Radiant's own "connect vertices" (one undo step, seams over several patches stay closed). It returns -1 when no patch is selected or the vertex selection is stale.
 - Undo, redo and inserts re-create patch objects, so read them again afterwards.
 
+### Brush and patch commits
+
+- `CommitBrushGeometry` writes a move (`delta`) or a classic brush's plane set (`pts`, 9 floats per face, wins over `delta`) as one undo step and marks the map modified. Inside an open undo step it joins it.
+- `PatchSetGrid` replaces a patch's control points by GUID. When `rows` or `cols` differ it resizes the net and resamples the UVs and vertex colors from the old one.
+- `PatchSetGrid` records no undo: call it between `BeginUndo` and `EndUndo`. It refuses non-finite points, coordinates past 131072, more than 5450 points and collapsed segments.
+- On hosts that have these two, `MoveBrush` on a patch also re-tessellates its render mesh. On older hosts call `Patch_RebuildMesh` after it yourself.
+
+### Running on an older host
+
+A host function added after 1.0.0 is missing on a 1.0.0 host (`rp::Has` is false). When the plugin must still work there, keep a fallback built from 1.0.0 functions and `RadiantAddress`:
+
+- Brush commit: `BeginUndo`, `SetBrushPlanes` or `MoveBrush`, `MarkMapModified`, `EndUndo`. Bracket only when `Undo_IsOpen` is false, because `EndUndo` closes whatever step is open.
+- Patch grid: clear the patch vertex selection, `Patch_Resize` if the size changes, write the control records, `Brush_Build(brush, 0, 1, 0)`, `Patch_RebuildMesh(patch)`, then copy the brush's padded bounds into its `BrushInst` cull bounds. Layouts in `MODTOOLS_REFERENCE.md` "Patch vertices".
+- Call the host function whenever `rp::Has` says it exists, so a host update fixes the plugin without a new release.
+
 ### Prefab scopes
 
 - `PrefabStackPlacement`: an entered prefab is shown in its file's own space, so a point `p` there sits at `origin + R(angles) * p` in the outer scope.

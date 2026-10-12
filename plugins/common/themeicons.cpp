@@ -632,10 +632,10 @@ namespace
                 p = uint32_t(a) << 24 | mix(r, glyph.r, face.r) << 16 | mix(g, glyph.g, face.g) << 8 | mix(b, glyph.b, face.b);
             }
     }
-    bool SkipForRecolor(const std::wstring& src)   // Qt's own images, sheet images, the splash, the editors' logos
+    bool SkipForRecolor(const std::wstring& src)   // Qt's own images, sheet images, the splash, the editors' logos, the cap dialog's pictures
     {
         if (IsLogo(src)) return true;
-        static const wchar_t* const kSkip[] = { L":/qt-project.org/", L":/stylesheet/", L":/SplashScreen/" };
+        static const wchar_t* const kSkip[] = { L":/qt-project.org/", L":/stylesheet/", L":/SplashScreen/", L":/dialogs/" };
         for (const wchar_t* k : kSkip) if (_wcsnicmp(src.c_str(), k, wcslen(k)) == 0) return true;
         return false;
     }
@@ -672,7 +672,7 @@ namespace
         std::wstring name = exe; size_t cut = name.find_last_of(L"\\/"); if (cut != std::wstring::npos) name = name.substr(cut + 1);
         std::wstring stamp = dir + L"\\.generated-" + name + L"-v2";
         char buf[64];
-        snprintf(buf, sizeof buf, "r3 %02x%02x%02x %02x%02x%02x | ", glyph.r, glyph.g, glyph.b, face.r, face.g, face.b);   // r3: the drawing rule
+        snprintf(buf, sizeof buf, "r4 %02x%02x%02x %02x%02x%02x | ", glyph.r, glyph.g, glyph.b, face.r, face.g, face.b);   // r4: the drawing rule
         std::string colours = buf + Narrow(source);
         snprintf(buf, sizeof buf, " | %llx", static_cast<unsigned long long>(source.empty() ? 0 : NewestFile(source)));
         colours += buf;
@@ -759,7 +759,9 @@ namespace
                     Recolor(px, w, h, bpl / 4, glyph, face, mode);
                     MakeDirs(dst.substr(0, dst.find_last_of(L'\\')));
                     QStr qd(dst);
-                    if (qt.imageSave(argb, &qd.d, "PNG", -1)) { ++made; list += Narrow(rel) + "\n"; } else ++failed;
+                    // other types keep their own format (Qt 5.3 reads a .bmp or .ico by its suffix)
+                    const bool png = dst.size() > 4 && _wcsicmp(dst.c_str() + dst.size() - 4, L".png") == 0;
+                    if (qt.imageSave(argb, &qd.d, png ? "PNG" : nullptr, -1)) { ++made; list += Narrow(rel) + "\n"; } else ++failed;
                 }
                 else if (fromSource)            // a coloured icon of the source set: in the pack as it is
                 {

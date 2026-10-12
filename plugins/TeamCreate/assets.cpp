@@ -16,7 +16,11 @@
 #include <mutex>
 #include <thread>
 #include <compressapi.h>
+#include <commctrl.h>
+#include <shellapi.h>
 #pragma comment(lib, "cabinet.lib")
+#pragma comment(lib, "comctl32.lib")
+#pragma comment(lib, "shell32.lib")
 
 namespace
 {
@@ -26,6 +30,9 @@ namespace
     constexpr uint64_t LargeAsset = 100ull * 1024 * 1024;   // warn once about a source set this big
     constexpr uint64_t CacheMax = 4ull * 1024 * 1024 * 1024; // received-file cache, oldest trimmed at session start
     constexpr size_t MaxBundle = 512ull * 1024 * 1024;
+    constexpr size_t GraphMax = 65536;     // assets one scan follows (map references, then their materials and images, stock ones included)
+    constexpr size_t QueueMax = 65536;     // manifests waiting for a transfer
+    constexpr size_t InboxMessages = 131072, InboxBytes = 256ull * 1024 * 1024;   // undelivered messages (a host announces 2 per asset in one burst)
     std::mutex g_mutex;
     std::condition_variable g_wake;
     std::deque<net::Message> g_messages;
@@ -124,8 +131,9 @@ namespace
     {
         if (!SafeRelative(p) || p != Lower(p)) return false;
         auto slash = p.find('/'); if (slash == std::string::npos) return false;
-        static const std::set<std::string> roots = {"_custom", "source_data", "model_export", "texture_assets", "xanim_export", "art_assets", "temp_assets", "usermaps", "mods", "apex", "aitype", "archetypes", SavedFolder};
-        if (!roots.count(p.substr(0, slash))) return false;
+        // any top-level source folder (mappers add their own to converter_gdt_dirs), never the engine's or ours
+        static const std::set<std::string> engine = {"bin", "share", "zone", "zone_source", "raw", "video", "players", "radiant", "sound", "lpc", "gdtdb", "deffiles", "win64", "pc", "docs_modtools", "crash_reports", "__streamed_assets"};
+        if (engine.count(p.substr(0, slash))) return false;
         auto ext = fs::u8path(p).extension().u8string();
         if (gdt) return ext == ".gdt";
         static const std::set<std::string> exts = {".xmodel_bin", ".xmodel_export", ".xanim_bin", ".xanim_export", ".tga", ".tif", ".tiff", ".dds", ".png", ".jpg", ".jpeg", ".exr", ".hdr", ".wav", ".flac", ".fbx", ".obj", ".smd", ".xmodel_json"};
@@ -458,7 +466,8 @@ namespace
                 while (!todo.empty() && !g_stop)
                 {
                     std::string id = todo.front(); todo.pop_front(); if (!visited.insert(id).second) continue;
-                    Check(visited.size() <= 2048, "asset dependency graph limit");
+                    // past the cap the rest stays unstreamed, the worker lives on (a throw here ended every session on real maps)
+                    if (visited.size() > GraphMax) { if (missing.insert("graph limit").second) Event("asset scan stopped at " + std::to_string(GraphMax) + " assets: the rest of the map's assets are not streamed"); break; }
                     auto old = records.find(id);
                     if (old != records.end() && !old->second.local) continue; // the host's accepted revision is authoritative
                     try
@@ -480,7 +489,7 @@ namespace
                         if (old == records.end() || old->second.signature != r.signature) { records[id] = r; announce(r, 0, false); }
                         for (const auto& d : a.dependencies) todo.push_back(d);
                     }
-                    catch (const std::exception& e) { Event("cannot stream " + id + ": " + e.what()); }
+                    catch (const std::exception& e) { if (missing.insert(id + " err " + e.what()).second) Event("cannot stream " + id + ": " + e.what()); }
                 }
             };
             LOG("assets: external backup directory (made when a local asset is first replaced): %s", backup.u8string().c_str());
@@ -528,22 +537,14 @@ namespace
                             Asset a = Decode(r); std::string id = a.Id(); Record candidate{a, Fingerprint(a), false};
                             receivedAt = GetTickCount64();
                             auto current = records.find(id);
-                            if (g_host)
-                            {
-                                // an offer can add an asset but never replace a host asset
-                                Asset local;
-                                // the offering peer gets the host's revision directly, only when its offer differs
-                                if (resolver.Find(id, local)) { Record own{local, Fingerprint(local), true}; records[id] = own; announce(own, 0, false); if (own.signature != candidate.signature) announce(own, message.from, true); continue; }
-                                if (current != records.end()) { if (current->second.signature != candidate.signature) announce(current->second, message.from, true); continue; }
-                            }
+                            // an offer can add an asset but never replace a host asset: an offering peer gets the host's revision when its offer differs
+                            if (g_host && current != records.end()) { if (current->second.signature != candidate.signature) announce(current->second, message.from, true); continue; }
                             if (current != records.end() && current->second.signature == candidate.signature) continue;
-                            if (!g_host)
-                            {
-                                Asset local;
-                                if (resolver.Find(id, local) && Fingerprint(local) == candidate.signature) { candidate.local = true; candidate.mirror = true; records[id] = candidate; continue; }
-                            }
                             if (download && download->record.asset.Id() == id && download->record.signature == candidate.signature) continue;
-                            Check(waiting.size() < 2048, "asset manifest queue limit"); waiting[id] = {message.from, candidate};
+                            // a full queue drops the manifest, the sender repeats it within 15 minutes
+                            if (waiting.size() >= QueueMax) { if (missing.insert("queue limit").second) Event("asset queue full (" + std::to_string(QueueMax) + "): later assets wait for the sender's next announce"); continue; }
+                            // this PC's own copy is compared when the asset is picked (hashing its files): the inbox drains at network speed
+                            waiting[id] = {message.from, candidate};
                             if (TotalBytes(a) > LargeAsset && missing.insert(id + " large").second) Event("queued " + id + " (" + Size(TotalBytes(a)) + " of source files): a long transfer");
                         }
                         else if (message.type == net::MSG_ASSET_CONVERTED)
@@ -633,13 +634,29 @@ namespace
                     }
                     catch (const std::exception& e) { Event(std::string("asset transfer rejected: ") + e.what()); download.reset(); }
                 }
-                if (!g_stop && !download && !waiting.empty())
+                // Picks run for at most half a second per pass so chunk requests from peers keep being answered
+                for (uint64_t picking = GetTickCount64(); !g_stop && !download && !waiting.empty() && GetTickCount64() - picking < 500;)
                 {
                     // Smallest first: definitions and small models arrive before a big texture.
                     auto it = waiting.begin();
                     for (auto w = waiting.begin(); w != waiting.end(); ++w) if (TotalBytes(w->second.second.asset) < TotalBytes(it->second.second.asset)) it = w;
-                    download.reset(new Download); download->peer = it->second.first; download->record = it->second.second; waiting.erase(it);
-                    auto o = offers.find(download->record.asset.Id());
+                    uint32_t from = it->second.first; Record candidate = it->second.second; waiting.erase(it);
+                    const std::string id = candidate.asset.Id();
+                    try
+                    {
+                        // Compared with this PC's own definition now, not when the manifest arrived: hashing the files is the slow part
+                        Asset local;
+                        if (resolver.Find(id, local))
+                        {
+                            Record own{local, Fingerprint(local), true};
+                            if (g_host) { records[id] = own; announce(own, 0, false); if (own.signature != candidate.signature) announce(own, from, true); continue; }
+                            if (own.signature == candidate.signature) { candidate.local = true; candidate.mirror = true; records[id] = candidate; continue; }
+                        }
+                    }
+                    catch (const std::exception& e) { if (missing.insert(id + " cmp " + e.what()).second) Event("cannot compare " + id + " with this PC's copy: " + e.what()); continue; }
+                    auto current = records.find(id); if (current != records.end() && current->second.signature == candidate.signature) continue;
+                    download.reset(new Download); download->peer = from; download->record = candidate;
+                    auto o = offers.find(id);
                     if (o != offers.end() && o->second.peer == download->peer && o->second.signature == download->record.signature) download->converted = absent(o->second.files);
                     try { pump(); }
                     catch (const std::exception& e) { Event(std::string("asset install failed: ") + e.what()); download.reset(); }
@@ -756,6 +773,84 @@ namespace
         catch (...) { Event("asset streaming stopped after an unexpected error; recovery files retained"); }
         g_running = false;
     }
+    std::wstring Wide(const std::string& text)
+    {
+        std::wstring w(text.size() + 1, L'\0'); int n = MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, &w[0], int(w.size()));
+        w.resize(n > 0 ? size_t(n - 1) : 0); return w;
+    }
+    // "40 images, 35 materials, 23 models" from ids like "image:name"
+    std::string CountByType(const std::vector<std::string>& ids)
+    {
+        std::map<std::string, size_t> n; for (const auto& id : ids) n[id.substr(0, id.find(':'))]++;
+        std::string out;
+        for (const auto& t : n)
+        {
+            std::string name = t.first == "xmodel" ? "model" : t.first;
+            out += (out.empty() ? "" : ", ") + std::to_string(t.second) + " " + name + (t.second == 1 ? "" : "s");
+        }
+        return out;
+    }
+    // Every list in full, for the dialog's link. Empty when it cannot be written
+    fs::path WriteEndList(const EndSummary& s, const std::string& reason, const std::string& saveTo)
+    {
+        try
+        {
+            fs::path file = fs::path(s.backup).parent_path().parent_path() / L"session_end_assets.txt";
+            std::string t = "Team Create session over (" + reason + ")\r\n\r\nStreamed assets the saved map uses (" + std::to_string(s.ids.size()) + "), saved to " + saveTo + " on Yes:\r\n";
+            for (const auto& x : s.ids) t += "  " + x + "\r\n";
+            if (!s.replaces.empty())
+            {
+                t += "\r\nSame name as an asset you already have (" + std::to_string(s.replaces.size()) + "): saving takes yours out of its GDT, a copy is in " + s.backup + "\r\n";
+                for (const auto& x : s.replaces) t += "  " + x + "\r\n";
+            }
+            if (!s.missing.empty())
+            {
+                t += "\r\nUsed by the map but never arrived, cannot be saved (" + std::to_string(s.missing.size()) + "):\r\n";
+                for (const auto& x : s.missing) t += "  " + x + "\r\n";
+            }
+            fs::create_directories(file.parent_path()); Write(file, t); return file;
+        }
+        catch (...) { return {}; }
+    }
+    HRESULT CALLBACK EndDialogProc(HWND, UINT note, WPARAM, LPARAM lParam, LONG_PTR data)
+    {
+        if (note == TDN_HYPERLINK_CLICKED && data) ShellExecuteW(nullptr, L"open", reinterpret_cast<const wchar_t*>(data), nullptr, nullptr, SW_SHOWNORMAL);
+        (void)lParam; return S_OK;
+    }
+    // IDYES keep, IDNO discard. A task dialog under this DLL's Common Controls 6 context (see pane.cpp ShowNotice), a message box without it
+    int AskKeep(const EndSummary& s, const std::string& reason, const std::string& saveTo)
+    {
+        fs::path list = WriteEndList(s, reason, saveTo); std::wstring listPath = list.wstring();
+        std::string why = reason; if (!why.empty()) why[0] = char(tolower(static_cast<unsigned char>(why[0])));
+        std::string body = "The session is over (" + why + ").\n\nThe map you saved uses " + std::to_string(s.ids.size()) + " streamed asset(s): " + CountByType(s.ids) + ".";
+        if (!s.replaces.empty()) body += "\n\n" + std::to_string(s.replaces.size()) + " have the same name as an asset you already have. Saving replaces yours (a backup is kept).";
+        if (!s.missing.empty()) body += "\n\n" + std::to_string(s.missing.size()) + " never arrived and cannot be saved.";
+        std::wstring content = Wide(body) + (listPath.empty() ? L"" : L"\n\n<a href=\"list\">Show every asset</a>");
+        std::wstring instruction = L"Keep the " + std::to_wstring(s.ids.size()) + L" streamed asset(s) your map uses?";
+        std::wstring keep = L"Save them\nInto " + Wide(saveTo) + L", with their own GDT";
+        std::wstring drop = L"Discard them\nThe saved map then refers to assets this PC does not have";
+        HWND owner = mt::MainWindow(); int answer = 0; HMODULE self = nullptr;
+        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, reinterpret_cast<LPCWSTR>(&AskKeep), &self);
+        ACTCTXW ctx = { sizeof ctx }; ctx.dwFlags = ACTCTX_FLAG_HMODULE_VALID | ACTCTX_FLAG_RESOURCE_NAME_VALID; ctx.hModule = self; ctx.lpResourceName = MAKEINTRESOURCEW(2);
+        HANDLE act = self ? CreateActCtxW(&ctx) : INVALID_HANDLE_VALUE; ULONG_PTR cookie = 0;
+        const bool activated = act != INVALID_HANDLE_VALUE && ActivateActCtx(act, &cookie);   // an exe with its own manifest needs none
+        {
+            TASKDIALOG_BUTTON buttons[] = { { IDYES, keep.c_str() }, { IDNO, drop.c_str() } };
+            TASKDIALOGCONFIG td = { sizeof td };
+            td.hwndParent = owner; td.dwFlags = TDF_USE_COMMAND_LINKS | TDF_ENABLE_HYPERLINKS | TDF_POSITION_RELATIVE_TO_WINDOW;
+            td.pszWindowTitle = L"Team Create"; td.pszMainIcon = s.replaces.empty() ? TD_INFORMATION_ICON : TD_WARNING_ICON;
+            td.pszMainInstruction = instruction.c_str(); td.pszContent = content.c_str();
+            td.pButtons = buttons; td.cButtons = 2; td.nDefaultButton = IDYES;
+            td.pfCallback = EndDialogProc; td.lpCallbackData = reinterpret_cast<LONG_PTR>(listPath.empty() ? nullptr : listPath.c_str());
+            if (FAILED(TaskDialogIndirect(&td, &answer, nullptr, nullptr))) answer = 0;
+            if (activated) DeactivateActCtx(0, cookie);
+        }
+        if (act != INVALID_HANDLE_VALUE) ReleaseActCtx(act);
+        if (answer == IDYES || answer == IDNO) return answer;
+        std::string text = body + "\n\nYes: save them into " + saveTo + ".\nNo: discard them; the saved map then refers to assets this PC does not have.";
+        if (!listPath.empty()) text += "\n\nEvery asset: " + list.u8string();
+        return MessageBoxW(owner, Wide(text).c_str(), (L"Team Create: " + instruction).c_str(), MB_YESNO | (s.replaces.empty() ? MB_ICONQUESTION : MB_ICONWARNING) | MB_SETFOREGROUND);
+    }
 }
 namespace assets
 {
@@ -803,18 +898,9 @@ namespace assets
         else if (s.ids.empty()) Note(std::string("session over (") + why + "): no saved map uses a streamed asset");
         else
         {
-            auto list = [](const std::vector<std::string>& v) { std::string t; size_t n = 0; for (const auto& x : v) { if (++n > 10) { t += "  ... and " + std::to_string(v.size() - 10) + " more\n"; break; } t += "  " + x + "\n"; } return t; };
             std::string root = rp::host->RadiantRoot ? fs::path(rp::host->RadiantRoot(rp::self)).u8string() : std::string();
             std::string reason = why; while (!reason.empty() && reason.back() == '.') reason.pop_back();
-            std::string text = "The Team Create session is over (" + reason + ").\n\nThe map you saved uses " + std::to_string(s.ids.size()) +
-                " asset(s) streamed from the other mappers:\n" + list(s.ids) + "\nSave them on this PC? They go to their own folder and GDT:\n  " + root + "\\" + SavedFolder + "\\\n";
-            if (!s.replaces.empty())
-                text += "\nWARNING: " + std::to_string(s.replaces.size()) + " of them have the same name as an asset you already have. Saving replaces yours "
-                    "(your definition is taken out of its GDT, a copy is in " + s.backup + "):\n" + list(s.replaces);
-            if (!s.missing.empty()) text += "\n" + std::to_string(s.missing.size()) + " asset(s) the map uses never arrived and cannot be saved:\n" + list(s.missing);
-            text += "\nYes: save them.\nNo: discard them; the saved map then refers to assets this PC does not have.";
-            std::wstring w(text.size() + 1, L'\0'); int n = MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, &w[0], int(w.size())); w.resize(n > 0 ? size_t(n - 1) : 0);
-            int r = g_endAnswer >= 0 ? (g_endAnswer ? IDYES : IDNO) : MessageBoxW(mt::MainWindow(), w.c_str(), L"Team Create", MB_YESNO | (s.replaces.empty() ? MB_ICONQUESTION : MB_ICONWARNING) | MB_SETFOREGROUND);
+            int r = g_endAnswer >= 0 ? (g_endAnswer ? IDYES : IDNO) : AskKeep(s, reason, root + "\\" + SavedFolder + "\\");
             if (r == IDYES) { std::lock_guard<std::mutex> lock(g_mutex); g_keep.insert(s.ids.begin(), s.ids.end()); }
             Note(std::string("session over (") + why + "): " + std::to_string(s.ids.size()) + " streamed asset(s) used by the saved map " + (r == IDYES ? "kept" : "discarded by the user"));
         }
@@ -833,7 +919,7 @@ namespace assets
     {
         if (!g_running || g_stop || message.payload.size() > 2 * 1024 * 1024) return;
         std::lock_guard<std::mutex> lock(g_mutex);
-        if (g_queueBytes + message.payload.size() > 8 * 1024 * 1024 || g_messages.size() >= 2048) { g_dropped = true; return; }
+        if (g_queueBytes + message.payload.size() > InboxBytes || g_messages.size() >= InboxMessages) { g_dropped = true; return; }
         g_queueBytes += message.payload.size(); g_messages.push_back(message); g_wake.notify_all();
     }
     void OnSaved(const std::wstring& path)

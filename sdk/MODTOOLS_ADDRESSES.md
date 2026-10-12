@@ -8,15 +8,24 @@ Names come from Treyarch's log texts and id's Q3Radiant where known, else from w
 Every function address below is a real function start (listed in the exe's exception table). This file is
 generated from the addresses the host and the shipped plugins use: do not edit it by hand.
 
-## Radiant functions (201)
+## Radiant functions (236)
 
 | Address | Name | Prototype (x64) | Notes |
 | ------- | ---- | --------------- | ----- |
+| `0x1400F8D90` | `FxLightIcon` | `(ctx, ...)` | the yellow icon model of a light elem, ctx+72 = the elem def |
+| `0x1400FB5D0` | `FxDrawSprites` | `(sys, effect, ...10 args)` | FX_Draw's per-effect sprites, called before kFxDrawEffect |
+| `0x1400FB8C0` | `FxDrawEffect` | `(sys, effect, ...12 args)` | FX_Draw's per-effect draw, effect +92 origin, +160 def handle |
 | `0x1401035F0` | `MaterialProp` |  | property of a material handle (map lookup, null -> read at +336) |
+| `0x14010A420` | `DrawIndexed` |  | Gfx DrawIndexed wrapper: (indexCount, startIndex, baseVertex) |
 | `0x14013BF10` | `FxLoadEfx` | `(const char* "dir/name", def)` | parses fx/<name>.efx into the def, 0 when missing |
 | `0x14013C020` | `FxRegisterDef` | `(int* out, def, char reload)` | compiles and registers the def, *out = handle (the name's string id), 0 on failure |
+| `0x140159060` | `FxKillOne` | `(sys, effect)` | kills one effect and its children, the kill-all's per-effect call |
 | `0x140160490` | `FxEffectPtr` | `(int client, unsigned effect)` | the live effect or NULL |
+| `0x1401613A0` | `FxSetCamera` | `(int client, int which, const float* view)` | the camera a step culls spawns against, +148 = plane count |
+| `0x140162E90` | `FxChildSpawns` | `(def, cap)` | spawn count of a child def: the step reads it without a null check |
+| `0x140167F00` | `FxEffectUpdate` | `(sys, effect, float)` | one effect from effect+200 (last update ms) to sys+2292, origin at effect+92 |
 | `0x1401A8A00` | `SceneEarlyGenericSceneCallback` |  |  |
+| `0x1401D9CF0` | `AnimSliderCtor` | `(this, QWidget* parent)` | the Animation window's QSlider subclass (128 bytes, 10 px font) |
 | `0x1401DC540` | `BrushCache_ModelDispatcher` |  | Fixed-size misc_model category callback (generic and model-specific cull checks) |
 | `0x1401DEB00` | `Brush_Build` | `(brush_t*, bool snap, bool markModified, uint flags)` | rebuilds windings and bounds |
 | `0x1401DED20` | `Brush_BuildWindings` |  | recomputes brush+64 mins / +76 maxs (+88/+100 padded copy) |
@@ -43,11 +52,15 @@ generated from the addresses the host and the shipped plugins use: do not edit i
 | `0x140232270` | `CamRoutineProcessing` |  | steps the bake once when +232 == 4 |
 | `0x140238300` | `CamReloadAssets` |  |  |
 | `0x14023A540` | `CamOnPaint` |  |  |
+| `0x14023ACF0` | `ExposureAdapt` | `(cam, ...)` | auto exposure, pops the readback list and smooths cam+3712..3720 |
 | `0x140243120` | `CamProcessAllBrushes` |  |  |
 | `0x140244120` | `CCamWnd::Cam_Draw` | `(CCamWnd* this, ...)` | 3D view frame |
 | `0x1402488A0` | `CCamWnd_DrawHud` |  | Cam view HUD text, called from CCamWnd::OnRender after the 3D scene: (CCamWnd* this, ?, int w, int h) |
 | `0x14024F080` | `CCamWnd_OnRender` |  | the whole 3D view frame incl. HUD |
 | `0x14025E770` | `SceneEarlyBrushInstCallback` |  |  |
+| `0x1402A95E0` | `ReadbackPopReady` |  | same, null when the oldest is not ready yet |
+| `0x1402A9AD0` | `ReadbackPopWait` | `(list, shared_ptr* out)` | pops the oldest readback, waiting for the GPU |
+| `0x1402AE780` | `OutlineLambda` |  | Cam_Draw selection pass, per selected BrushInst: (lambda*, BrushInst**) -> bool |
 | `0x1402AEE10` | `SceneEarlyRadiantBrushCallback` |  |  |
 | `0x1402AEF10` | `SceneEarlyVolumeDecalCallback` |  |  |
 | `0x1402BC480` | `HandleMapClear` | `(manipulator + 144)` | empties the handle map |
@@ -57,16 +70,20 @@ generated from the addresses the host and the shipped plugins use: do not edit i
 | `0x1402F38B0` | `CCamWnd::UpdateGI` |  | CCamWnd::UpdateGI(CCamWnd*, char tickMode), the export loop calls it with 0 |
 | `0x1402F69E0` | `BakeStart` | `void(CCamWnd*, char incremental, char sun, uchar probes, char)` | every build starts here |
 | `0x140302410` | `SmoothTask` |  | state 5 "Probe Smooth Postprocess" std::async callable: char(capture*), 0 = skipped |
+| `0x1403A91A0` | `DebugLists` | `(a, b, c)` | Cam_Draw's two persistent primitive lists (0x14448FC80, 0x14448FCD0) |
 | `0x140420920` | `TreeModelClear` |  | asset tree source model: removeRows(0, rowCount) |
 | `0x14042C300` | `TreeSetSelected` |  | asset tree proxy: store the selected set, then invalidateFilter |
 | `0x1404305C0` | `TreePaneRefresh` |  | asset tree pane: selection broadcast -> rebuild the model, filter the proxy |
 | `0x140432AE0` | `TreeSelectionSlot` |  | asset tree pane: tree selection changed -> select in the map, broadcast |
 | `0x1404632C0` | `EdHolderCtor` | `(holder)` | the 599544-byte editor def holder an fx class keeps at +400: int handle, then the def at +8 |
+| `0x140472F00` | `PlaybackStopAll` |  | FX playback's stop-all (Stop Effect, Retrigger FX): kill-all 0x14015A540 on client 0 |
 | `0x1404732E0` | `PlaybackUpdate` | `(mgr)` | EffectPlaybackMgr::Update, advances the fx clock by now - mgr+40 |
+| `0x1404DD740` | `ViewDrop` | `(bridge + 1960, view 0 = camera, x, y from the top left, const QMimeData*)` | bool: a browser drop, the camera traces the cursor ray |
 | `0x1405944A0` | `KeyTest` |  | expression leaf 5: entity key/value test (brush_t*, node*) |
 | `0x140594BF0` | `NameMatch` |  | pattern test (pattern*, const char* name) |
-| `0x1405B29C0` | `FxKill` | `(unsigned effect)` | kills the effect and its children |
-| `0x1405B2BD0` | `FxSpawn` | `(int def, const float origin[3], const float axis[9], int delayMs, float timeScale)` | effect handle, 0 = failed |
+| `0x1405B28C0` | `FxRelease` | `(unsigned effect)` | drops the spawner's reference and the effect's own, the slot is freed |
+| `0x1405B29C0` | `FxKill` | `(unsigned effect)` | kills the effect and its children, the references stay |
+| `0x1405B2BD0` | `FxSpawn` | `(int def, const float origin[3], const float axis[9], int delayMs, float unused)` | effect handle, 0 = failed |
 | `0x1405B5740` | `FxLoadLights` | `(const char* name, holder)` | the dynamicLight blocks of the text into the holder |
 | `0x1405B5830` | `FxFixSegments` | `(holder)` | segment light names after a load |
 | `0x140620F90` | `RadMetaObject` |  | QRadFileDialog::metaObject |
@@ -79,12 +96,20 @@ generated from the addresses the host and the shipped plugins use: do not edit i
 | `0x1406527C0` | `PrefsSlot` |  | Settings > Preferences... slot (ctor, load, exec, OK tail) |
 | `0x14065C450` | `FilesModifiedCheck` | `FilesModifiedCheck(this)` | "Files Modified" Yes/No box, Yes reloads the map. Only runs when Perforce is enabled |
 | `0x1406F6A80` | `BeginParseSession` | `(const char* name)` / `` | around an import |
-| `0x14078E1D0` | `Patch_Resize` | `(patch, rows, cols)` | remaps the vertex selection by index |
+| `0x14078E1D0` | `Patch_Resize` | `void (patch, int rows, int cols)` | the control array may move (read its pointer again), remaps the vertex selection by index |
 | `0x1407956A0` | `Patch_InsertDelete` | `(insert, column, first)` | over the selected brushes (menu wrappers 0x140655DB0..EA0) |
 | `0x14079C450` | `Patch_ConnectVerts` |  | void Patch_ConnectVerts(char): the W handler's body in Drag Vertices mode (0x140650860 checks the drag mode first). Flag 0, candidates > 0: every selected vertex copies candidate[0], undo "connect vertices", both counts cleared |
+| `0x1407A49C0` | `Patch_RebuildMesh` | `__int64 (patch)` | re-tessellates the render mesh from the control net |
 | `0x1407BF640` | `Patch_ConnectToCandidate` |  | what the dispatcher calls in that case (not called directly) |
 | `0x1408097A0` | `EntityIsPropType` |  | Entity Info: "is_prop_type" of the selected entity's definition |
+| `0x140815740` | `QRadColorSelectDialog` | `QRadColorSelectDialog(this, const QColor* initial, ...)` |  |
+| `0x1408165F0` | `Dtor` |  | complete dtor, the deleting dtor 0x1408181F0 calls it too |
+| `0x140816700` | `GetColor` |  | QColor* (QColor* ret, const QColor* initial, ...): construct, exec, destruct |
+| `0x140816DD0` | `Refresh` |  | rebuilds the pixmaps, +304 and the spin boxes from h, s, v, a |
+| `0x140817400` | `Accept` |  | accept slot: pushes +304 onto the recent row |
 | `0x1408186D0` | `QRadDockWidget_ctor` |  | QRadDockWidget::QRadDockWidget(this, const QString& title, QObject* bridge): TADockWidget ctor (toggle QAction at +64, unique name at +72, content slot at +80), then +104 = bridge->mainWindow (bridge+568), +112 = bridge |
+| `0x14081E5D0` | `ToolboxToggleFav` | `(toolbox, QStandardItem*)` | Toggle Favorite, the tree row and QSettings <name>/Favorites |
+| `0x140821160` | `ToolboxFindItem` | `(QStandardItem* root, const QString& name)` | QStandardItem*, depth first by data(256) |
 | `0x140858AB0` | `QtEntityInfo::EntitySelectionChanged` |  | QtEntityInfo::EntitySelectionChanged(this) |
 | `0x1408964C0` | `ToggleGameView` | `(QtFilterWindow*)` | flips the box and both flags, refilters |
 | `0x140930A20` | `ExportDialogCtor` |  | QtLightingExportDialog*(this, QWidget* parent) |
@@ -101,6 +126,10 @@ generated from the addresses the host and the shipped plugins use: do not edit i
 | `0x140B00FF0` | `Selection_CloseUndo` | `(BrushCollection*)` | after Undo_AddBrushList |
 | `0x140B01070` | `Selection_EndBatch` | `(BrushCollection*, int 3, __int64 0, char 1)` | fires the change event |
 | `0x140B01DB0` | `Select_Brush` | `(BrushCollection*, BrushInst*)` | takes a `BrushInst`, never a `brush_t` (crashes) |
+| `0x140B4A6D0` | `ModelSetSize` |  | the browser's SQL model setIconSize(QSize): size at +32, drops the thumbnails (vtable +384), grey placeholder |
+| `0x140B4C430` | `UpdateSearch` |  | ThumbnailBrowser::UpdateSearch (vtable +472) |
+| `0x140B4C8A0` | `ThumbnailBrowser::setIconSize` |  | ThumbnailBrowser::setIconSize(int): view icon and grid size, QSettings, vtable +472 |
+| `0x140B59CC0` | `CachedLines` | `(cam + 0xEF8)` | Cam_Draw's pre-built line sets, editor view only |
 | `0x140B894B0` | `Malloc` | `void*(size_t)` | the exe's allocator |
 | `0x140B894F0` | `Free` | `void(void*)` |  |
 | `0x140B89520` | `BlockMalloc` |  | block data (the store clear frees it with 0x140B89560) |
@@ -149,6 +178,7 @@ generated from the addresses the host and the shipped plugins use: do not edit i
 | `0x140E8AEC0` | `RadiantMainWin_DockContainer` | `(QMainWindow*)` | the TADockContainer central widget, null until the UI exists |
 | `0x140E920C0` | `UnLz4` | `int(src, dst, compressed, maxOut)` | LZ4_decompress_safe |
 | `0x140E95120` | `Lz4` | `int(src, dst, size)` | LZ4_compress, dst >= size + size/255 + 16 |
+| `0x140EB52F0` | `Simplify` |  | tfbDecimate simplifier, the linker's 0x7AE170 |
 | `0x140F28F90` | `Find` |  | the finder |
 | `0x140F35CF0` | `AssertHandler` | `(file, line, kind, expr, fmt, ...)` | nonzero = continue, thunk 0x14000C1C6 |
 | `0x140F427B0` | `Inverse` | `void(const float M[16], float Minv[16])` | row-major, no conditioning check |
@@ -201,6 +231,7 @@ generated from the addresses the host and the shipped plugins use: do not edit i
 | `0x1411B8FC0` | `RenderMainPipeline` |  | deferred/forward lighting, transparency, volumetrics, etc |
 | `0x1411BAF00` | `DeepRenderPassDispatch` |  |  |
 | `0x1411BB0E0` | `V722SpecialStageSubmit` |  |  |
+| `0x1411BB860` | `ModelWire` |  | camera model wireframe: (model, int, RGBA bytes*, drawState*, lod, -1, flags, flags) |
 | `0x1411CDBB0` | `DeepSortA` |  |  |
 | `0x1411CDDE0` | `DeepSortB` |  |  |
 | `0x1411E1FE0` | `DrawText2D` | `(text, Font**, pos, xAdvance, yDir, rgba, outEnd, uint8 backgroundAlpha)` | void DrawText2D(const char* text, Font** font, const float pos[3], const float xAdvance[3], const float yDir[3], const float rgba[4], float outEnd[3] (nullable), uint8 backgroundAlpha) (thunk sub_14008A265) pos = baseline start. backgroundAlpha > 0 draws a black box first. Refuses fonts whose material (+0x48) is null |
@@ -212,15 +243,20 @@ generated from the addresses the host and the shipped plugins use: do not edit i
 | `0x1411EC7C0` | `V723GeoResolveMesh` |  |  |
 | `0x141259200` | `SetTargets` | `(colour, depth, 0, 0)` |  |
 | `0x141259590` | `Clear` | `(char flags 7, const float rgba[4], float depth)` |  |
+| `0x1412CAE30` | `Reduce` | `(out, model**, lodSpec*, ?, error string*)` | one auto LOD |
+| `0x1412CBF70` | `CacheName` |  | "ToolsGfx/xmeshes/v39/<mesh>/pct%d_<key>" |
+| `0x1412CBFE0` | `CacheRead` |  | "ToolsGfx/xmeshes/v39/<mesh>/pct%d_<key>" |
+| `0x1412CC720` | `CacheWrite` |  | "ToolsGfx/xmeshes/v39/<mesh>/pct%d_<key>" |
 | `0x1412F15D0` | `Lookup` | `int (table*, Qt::MouseButton, Qt::KeyboardModifiers)` | action id, 0 = none |
 
-## Radiant globals (93)
+## Radiant globals (97)
 
 | Address | Name | Notes |
 | ------- | ---- | ----- |
 | `0x1422A5BE8` | `BrushFileInfo` | assert "file" record of the brush module, line 0x7E = more than 64 faces |
 | `0x142310788` | `PlaybackMgrVtbl` | EffectPlaybackMgr's vtable, checked before the manager is trusted |
 | `0x142466D00` | `ToolboxMeta` | QtAbstractToolbox::staticMetaObject: signals RecentItemsUpdated, ItemDoubleClicked, AddItemAtCameraLocation |
+| `0x1424FA348` | `Vtbl` |  |
 | `0x1424FB138` | `RadDialogVtbl` | QRadFileDialog's vtable, slot 0 = metaObject thunk 0x140011F4A |
 | `0x142508438` | `EffectsBrowserVtbl` | QtEffectsBrowser's vtable (RTTI .?AVQtEffectsBrowser@@) |
 | `0x142515CC8` | `FilterWindowVtable` | QtFilterWindow::`vftable' |
@@ -244,6 +280,7 @@ generated from the addresses the host and the shipped plugins use: do not edit i
 | `0x1444C6560` | `main window` | RadiantMainWin* RadiantMainWin* (mainwin+64 -> QE children, children+240 -> CCamWnd*) |
 | `0x1444C656C` | `redraw flags` | int OR in bits to mark views dirty for the next tick |
 | `0x1444C6578` | `FrameBudget` | double, Radiant's limiter: frames it may still ask for |
+| `0x145214C70` | `Recent` | static QColor[10], the recent row |
 | `0x1452158C8` | `BeamLock` | SRWLOCK the reload holds while it walks the beam map |
 | `0x145215AC0` | `FpsDeepInputMask` | 10-byte internal key/button state snapshot |
 | `0x145216980` | `FpsDeepJqProfTrigger` | built-in short capture trigger |
@@ -274,6 +311,7 @@ generated from the addresses the host and the shipped plugins use: do not edit i
 | `0x1453A1768` | `HandleColors` | float[3][4]: X, Y, Z handle colours (rgba, 0..1), view color table rows |
 | `0x1453A17D4` | `g_dragMode` | int: 4 = Drag Vertices |
 | `0x1453A1810` | `g_brushCount` | int, counted during load |
+| `0x1453A1830` | `NoSelOutline` | int, nonzero = J turned the selection pass off |
 | `0x1453A1848` | `NowSeconds` | double, the idle tick's clock the manager reads |
 | `0x1453A1C20` | `GridIndex` | int: the grid size as an index (first field of the prefs block) |
 | `0x1453A1CAC` | `g_camXYUpdate` | int (0/1) |
@@ -289,6 +327,7 @@ generated from the addresses the host and the shipped plugins use: do not edit i
 | `0x1453A2278` | `selected brushes` | BrushCollection the selection |
 | `0x1453A22D8` | `active brushes` | BrushCollection everything not selected |
 | `0x1453A23A4` | `BakeQuality` | int 0/1/2: the toolbar's L / M / H, copied to the volume when a build starts |
+| `0x1453A23AA` | `LockSunVolume` | byte, the Exposure toolbar's "Lock Sun Volume": the camera keeps its sun volume and light state |
 | `0x145413B30` | `FxMapLoading` | byte: FX s_mapIsLoading, set and cleared by Map_LoadFile |
 | `0x145573AA0` | `g_debugFont` | Font*: +0x40 int line height, +0x48 material |
 | `0x1455740C0` | `DxDevice` | ID3D11Device* |
@@ -312,36 +351,66 @@ generated from the addresses the host and the shipped plugins use: do not edit i
 | `0x146D31B88` | `ImpEnterCriticalSection` | Radiant's import slot for EnterCriticalSection |
 | `0x146D31BF0` | `ImpTryEnterCriticalSection` | TryEnterCriticalSection |
 
-## APE functions (18)
+## APE functions (46)
 
 | Address | Name | Prototype (x64) | Notes |
 | ------- | ---- | --------------- | ----- |
+| `0x140050060` | `std::string::assign` |  | std::string::assign(const char*, size_t) with APE's allocator // selection handler: cmp [child tag size], 0 then jz, no attach without a child tag |
+| `0x14005FBC0` | `Intern` | `(uint64_t* out, const char*)` | the interned name handle |
+| `0x140062190` | `Field` | `(record, const char** out, const char* key)` | the value, "" when unset |
 | `0x14007A040` | `ReloadDeleteAssetDialog` | `(tree*, QVector<apeGdtFileCacheEntry*>* changed, QVector<char*>* deleted files)` |  |
+| `0x14007B690` | `Lookup` | `(asset db, const uint64_t* name handle, int type, char 0)` | record or null |
+| `0x14007CBC0` | `TypeIndex` | `(asset db, const uint64_t* type handle)` | type index, -1 unknown |
 | `0x140084510` | `TimerSlotBegin` |  |  |
 | `0x140084730` | `TimerSlotEnd` |  |  |
 | `0x14008AFA0` | `QVectorPtr_reallocData` |  | QVector<T*>::reallocData(QVector* v, int size, int alloc, int options); options 0 |
 | `0x1400B46C0` | `assetTreeUpdateFilters` | `assetTreeUpdateFilters(apeAssetTreeWidget*)` |  |
 | `0x1400C1160` | `Clear` |  | apeAssetWidget clear / reset |
 | `0x1400C1500` | `Reset` |  | apeAssetWidget clear / reset |
+| `0x1400C9EA0` | `apeColorDialog` | `apeColorDialog(this, QWidget* parent, const QColor* initial, bool alpha)` |  |
+| `0x1400CBF10` | `DeletingDtor` |  | vtable slot 3, inlines the complete dtor |
+| `0x1400CC980` | `Refresh` | `(this, bool notify)` | pixmaps, +280, spin boxes, notify = live update of the property |
+| `0x1400CD0B0` | `Accept` |  | accept slot: recent colors to QSettings, QDialog::accept |
 | `0x1400F85F0` | `apeFileCache_Walk` |  | QVector<entry*>* (apeFileCache*, QVector<entry*>* out) |
 | `0x1400F8A70` | `apeFileCache_Refresh` | `void (apeFileCache*)` | walk + re-parse + ReloadDeleteAssetDialog, only while the dirty byte is set |
 | `0x1400FD330` | `apeFileCache_SaveCache` | `(apeFileCache* this)` | runs once from apeFileCache::Start on the main thread |
 | `0x1401073B0` | `LoadImage` | `bool (QPixmap* out, const QString& path)` |  |
 | `0x140120990` | `apePreferencesDialog::apePreferencesDialog` |  | apePreferencesDialog::apePreferencesDialog(QWidget* parent) |
 | `0x14012A0D0` | `Frame` | `(preview widget*, ?)` | renders one frame, re-queues itself while playing |
+| `0x14012C5E0` | `GdtAsset` | `(shared_ptr<GdtAsset>* out, const std::string& name, const std::string& type)` |  |
+| `0x14012D3F0` | `RawGet` |  | apeGfxGdtEntry vtable[1]: (entry, std::string* out, const std::string* key) |
+| `0x140131EA0` | `Dispatch` | `(apePreviewWidget*, asset record*)` | picks the preview by the asset's type |
+| `0x140145740` | `Render` | `(widget data, ...)` | poses, placement and draw, the frame labels follow it |
 | `0x140147250` | `Reload` | `(previewWindowOpts*)` | re-reads the lighting states (the Lighting slots call it) |
+| `0x140217930` | `Simplify` |  | tfbDecimate simplifier, the linker's 0x7AE170 |
+| `0x14021E2F0` | `Reorder` | `(indices, triangles, float weights[3], out, batch)` | called by the surface build |
 | `0x140270AA0` | `ReadSsi` | `(const char* ssi name, Ssi* out)` | one ssi record from gdt.db |
+| `0x140298180` | `Find` |  | the finder, called by the techset include loader only |
 | `0x14031A530` | `EndsWith` |  | bool ends_with(const std::string* s, const std::string* suffix): memcmp of the tail |
+| `0x140338A60` | `ViewOf` | `(camera, view out, float fov)` | origin, axes, +48 tan of the half height, +52 of the half width |
+| `0x14047EA90` | `SetAnim` | `(holder, const std::string& anim name, int mode)` |  |
+| `0x140481070` | `LocalPose` |  | ModelInst local pose from an anim, a8 = the model's bone vector |
+| `0x140632170` | `Attach` | `(entries, parent entry, model, parent tag, child tag)` | the Preview Options attach |
+| `0x1406328D0` | `Length` | `(entries)` | float: the longest anim of the preview entries in seconds |
+| `0x1406331D0` | `Place` | `(entry, ?, bool)` | per-frame placement on the parent's tag, false = not drawn |
+| `0x1406368B0` | `Convert` | `(shared_ptr<Anim>* out, const std::string& name, int mode)` | mode 1 = stub |
+| `0x140647FD0` | `SetPlacement` | `(holder, const Xform*, float scale)` |  |
 | `0x140679C70` | `BuildOne` | `(surfaces*, model**, material, lod)` | one material of one LOD |
 | `0x14067AE20` | `BuildSurfaces` | `(surfaces*, model**)` | every LOD x material of the model |
+| `0x14067C300` | `Reduce` | `(out, model**, lodSpec*, ?, error string*)` | one auto LOD |
+| `0x14067D440` | `CacheName` |  | "ToolsGfx/xmeshes/v39/<mesh>/pct%d_<key>" |
+| `0x14067D4B0` | `CacheRead` |  | "ToolsGfx/xmeshes/v39/<mesh>/pct%d_<key>" |
+| `0x14067DBF0` | `CacheWrite` |  | "ToolsGfx/xmeshes/v39/<mesh>/pct%d_<key>" |
 
-## APE globals (6)
+## APE globals (8)
 
 | Address | Name | Notes |
 | ------- | ---- | ----- |
+| `0x140810E88` | `Vtbl` |  |
 | `0x1408352F0` | `PickerFilter` | the picker's filter string (81 chars, one xref) |
 | `0x14118D298` | `TypeSchemas` | global: object whose QList at +0x30 holds one schema per type index |
 | `0x14118D4D0` | `apeFileCache_Instance` | the one apeFileCache |
 | `0x14118D615` | `RadiantTheme` | bool radiantTheme, read by QT_SetTheme (0x14011BFC0) |
 | `0x14118D620` | `Opts` | previewWindowOpts (pointer) |
 | `0x14118D978` | `NoValue` | global: object whose char* at +0x18 is what a lookup of a missing key returns |
+| `0x14118D9D8` | `ScanThread` | the techsetdef scan QThread (a global object), started by apeMainWindow::Init |

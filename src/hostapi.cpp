@@ -29,7 +29,7 @@
 //     map ..................... CurrentMapPath, PrefabDepth, IsMapModified, ReloadMap, IsReloading, BeginOwnWrite,
 //                               EndOwnWrite, OwnWriteRecent, InhibitReloadPrompts, ReloadPromptsInhibited
 //     camera .................. GetCamera, SetCamera, GameView, SetGameView, LastCamParams, CamWindow, H_XYWindow
-//     patch vertices .......... H_PatchGrid, H_PatchSelectVerts, H_PatchWeldVerts, H_DragMode
+//     patch vertices .......... H_PatchGrid, H_PatchSetGrid, H_PatchSelectVerts, H_PatchWeldVerts, H_DragMode
 //     objects ................. ForEachEntity, ForEachEntityBrush, EntityGuid, BrushGuid, BrushOwner, WorldEntity,
 //                               GetSelection, WriteEntityText, FreeString, ImportMapText, DeleteBrushes,
 //                               SelectedBrushInsts, SelectBrushInsts, DeselectAll, RestampImportedGuids, H_RestampImportedEntities,
@@ -43,7 +43,7 @@
 //                               H_MeasureLabel, H_RequestRedraw, H_CamXYUpdateOnDrag, H_MoveBrush,
 //                               H_FindBrushesByGuid, H_BrushBounds, H_FindEntitiesByGuid, H_BrushPlanes,
 //                               H_SetBrushPlanes, H_EntityFixedSize, H_BrushOfInst, H_WriteEntityTextWith, H_PrefabStackPlacement,
-//                               H_BeginUntracked, H_EndUntracked, H_GetUndoTags, H_SetUndoTags
+//                               H_BeginUntracked, H_EndUntracked, H_GetUndoTags, H_SetUndoTags, H_CommitBrushGeometry
 //   ModToolsApeApi (A_*) ....... CopyAsset, A_CurrentAsset, A_SelectedAssets, A_TabCount, A_TabAsset, A_Print,
 //                               A_GdtDbPath, A_AssetTypes, A_ApeAddress, A_FindAssets, A_AssetTypeNames,
 //                               A_AssetInfo, A_TypeProperties, A_OutputText, A_Properties, A_SetProperty,
@@ -170,6 +170,11 @@ namespace
     {
         if (!Ok(p) || !guid || !rt::VerifyBinary()) return 0;
         return hooks::PatchGrid(hooks::PatchBrushByGuid(guid, false), rows, cols, xyz, cap);
+    }
+    int H_PatchSetGrid(ModToolsPlugin* p, const char* guid, int rows, int cols, const float* xyz, int count)
+    {
+        if (!Ok(p) || !guid || !*guid || !rt::VerifyBinary()) return 0;
+        return hooks::PatchSetGrid(hooks::PatchBrushByGuid(guid, false), rows, cols, xyz, count) ? 1 : 0;
     }
     int H_PatchSelectVerts(ModToolsPlugin* p, const ModToolsPatchVert* verts, int count)
     {
@@ -491,6 +496,10 @@ namespace
     int  H_SetBrushPlanes(ModToolsPlugin* p, ModToolsBrush b, const float* pts, size_t nFaces)
     {
         return Ok(p) && rt::VerifyBinary() && hooks::SetBrushPlanes(static_cast<hooks::RadPtr>(b), pts, nFaces) ? 1 : 0;
+    }
+    int  H_CommitBrushGeometry(ModToolsPlugin* p, ModToolsBrush b, const float* pts, size_t nFaces, const float delta[3], const char* label)
+    {
+        return Ok(p) && rt::VerifyBinary() && hooks::CommitBrushGeometry(static_cast<hooks::RadPtr>(b), pts, nFaces, delta, label ? label : "Place brush") ? 1 : 0;
     }
     int  H_EntityFixedSize(ModToolsPlugin* p, ModToolsEntity e)
     {
@@ -837,6 +846,8 @@ namespace
         NativeModelPreviewDrawCountForId,
         SetNativeModelCullBounds,
         TabPaneWith,
+        H_PatchSetGrid,
+        H_CommitBrushGeometry,
     };
 }
 

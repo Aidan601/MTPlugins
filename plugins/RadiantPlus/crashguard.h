@@ -12,4 +12,8 @@ void Shutdown();
 void AfterMapLoad();
 // Handles "crashguard ..." commands, false when the command is not ours.
 bool Command(const std::string& command, std::string& reply);
+// While a quiet scope is open asserts are logged and continue without a box (nests). Main thread.
+void QuietAsserts(bool on);
+// Asserts seen since load (counted in every mode the hook is installed).
+long AssertCount();
 }

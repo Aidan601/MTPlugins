@@ -1,7 +1,7 @@
-// update.cpp: the "new MTPlugins release" and "plugin updates" questions in the launcher (see update.h).
+// update.cpp: the "new MTPlugins release" question in the launcher and the "plugin updates" question in every app (see update.h).
 
 // MAP
-//   Settings     Enabled/SetEnabled ([update] check=), Source ([update] url=, https or a local file for tests), Skipped
+//   Settings     Enabled/SetEnabled ([update] check=), PluginsEnabled ([update] plugins=), Source ([update] url=), Skipped
 //   Workers      CheckWorker (GitHub's latest release JSON -> setup asset), DownloadWorker (setup exe into %TEMP%)
 //   Main thread  StartupCheck, CheckNow, Tick -> Ask, Launch, DownloadFailed
 //   Plugins      PendingPlugins, AskPlugins (renamed MessageBox buttons), ReportPlugins
@@ -17,6 +17,7 @@
 #include "mainthread.h"
 #include "app.h"
 #include "plugins.h"
+#include "hooks.h"
 #include "log.h"
 #include "../plugins/common/json.h"
 
@@ -38,10 +39,11 @@ namespace
     std::wstring g_setupPath;
     bool g_startupDone = false;
     bool g_inTick = false;                 // MessageBox's modal loop runs the tick again
-    // plugin updates: the index is fetched at start (browse::Refresh), the launcher asks once it is in and the release
-    // check is over, never in the same start as the release question (the installer updates our plugins anyway)
+    // plugin updates: the index is fetched at start, asked once it is in, never in the same start as the release question
     bool g_pluginsPending = false;
     bool g_releaseAsked = false;
+    bool g_manual = false;                 // Check for updates: ask even when switched off, answer even when nothing is new
+    std::string g_releaseLine;             // one line for the manual answer (guarded by g_mu)
     bool g_pluginsInstalling = false;      // InstallAll started from the question: report when it is done
     std::string g_pluginStatus = "not checked";
 
@@ -88,6 +90,7 @@ namespace
         {
             // 404: no published release yet (drafts do not count, a private repo answers 404 too)
             SetStatus("could not ask GitHub for the latest release: " + err);
+            { std::lock_guard<std::mutex> lk(g_mu); g_releaseLine = "Could not check for a new MTPlugins release (" + err + ")."; }
             g_phase = Idle;
             return;
         }
@@ -99,7 +102,13 @@ namespace
         if (!r.version.empty() && (r.version[0] == 'v' || r.version[0] == 'V')) r.version.erase(0, 1);
         std::vector<int> latest = browse::ParseVersion(r.version), mine = browse::ParseVersion(MTPLUGINS_VERSION);
         if (latest.empty()) { SetStatus("the latest release has no version tag ('" + root.str("tag_name") + "')"); g_phase = Idle; return; }
-        if (!browse::Newer(latest, mine)) { SetStatus("up to date (" MTPLUGINS_VERSION ", latest release " + r.version + ")"); g_phase = Idle; return; }
+        if (!browse::Newer(latest, mine))
+        {
+            SetStatus("up to date (" MTPLUGINS_VERSION ", latest release " + r.version + ")");
+            { std::lock_guard<std::mutex> lk(g_mu); g_releaseLine = "MTPlugins " MTPLUGINS_VERSION " is up to date."; }
+            g_phase = Idle;
+            return;
+        }
         r.page = root.str("html_url");
         if (!ValidHttps(r.page)) r.page = kReleases;
         if (const Json* assets = root.get("assets"))
@@ -163,14 +172,15 @@ namespace
         int idle = Idle;
         if (!g_phase.compare_exchange_strong(idle, Checking)) return;
         std::string src = Source();
+        { std::lock_guard<std::mutex> lk(g_mu); g_releaseLine.clear(); }
         SetStatus("checking " + (src.empty() ? std::string(kLatest) : src));
         Wrap(CheckWorker, new std::string(src.empty() ? kLatest : src));
     }
 
     // ---- main thread ------------------------------------------------------------------------------------------
-    int Box(const std::string& text, UINT flags)
+    int Box(const std::string& text, UINT flags, const wchar_t* title = L"MTPlugins update")
     {
-        return MessageBoxW(mt::MainWindow(), Widen(text).c_str(), L"MTPlugins update", flags | MB_SETFOREGROUND);
+        return MessageBoxW(mt::MainWindow(), Widen(text).c_str(), title, flags | MB_SETFOREGROUND);
     }
     void OpenPage(const std::string& url) { ShellExecuteW(nullptr, L"open", Widen(url).c_str(), nullptr, nullptr, SW_SHOWNORMAL); }
 
@@ -180,18 +190,14 @@ namespace
         { std::lock_guard<std::mutex> lk(g_mu); r = g_rel; }
         g_phase = Asking;
         g_releaseAsked = true;
-        std::string q = "MTPlugins " + r.version + " is out. You have " MTPLUGINS_VERSION ".\n\n";
+        std::string q = "MTPlugins " + r.version + " is out (you have " MTPLUGINS_VERSION ").\n\n";
         if (r.setupUrl.empty())
         {
-            q += "Open the release page to download it?";
-            if (Box(q + "\n\nTo stop these questions, untick \"Ask about MTPlugins updates\" in the Plugins window.", MB_YESNO | MB_ICONINFORMATION) == IDYES) OpenPage(r.page);
+            if (Box(q + "Open the release page?", MB_YESNO | MB_ICONINFORMATION) == IDYES) OpenPage(r.page);
             g_phase = Idle;
             return;
         }
-        q += "Update now? Yes downloads the installer and runs it. It updates the plugins you have and keeps your settings; "
-             "it asks to close the launcher and the editors before it copies any files.\n\n"
-             "No asks again the next time the launcher starts. To stop these questions, untick \"Ask about MTPlugins updates\" "
-             "in the Plugins window (Plugins menu).";
+        q += "Update now? The installer closes the launcher and the editors first and keeps your settings.";
         if (Box(q, MB_YESNO | MB_ICONINFORMATION) != IDYES) { SetStatus("update to " + r.version + " declined for now"); g_phase = Idle; return; }
         g_phase = Downloading;
         Wrap(DownloadWorker, nullptr);
@@ -235,11 +241,24 @@ namespace
     }
     void SetPluginStatus(const std::string& s) { g_pluginStatus = s; LOG("update: plugins: %s", s.c_str()); }
 
-    std::vector<browse::Entry> PendingPlugins(bool includeSkipped)
+    // forQuestion: each app asks only about the plugins that run in it
+    std::vector<browse::Entry> PendingPlugins(bool includeSkipped, bool forQuestion = false)
     {
         std::vector<browse::Entry> out;
-        for (const browse::Entry& e : browse::Updates()) if (includeSkipped || !Skipped(e)) out.push_back(e);
+        uint32_t mine = uint32_t(app::ApiId());
+        for (const browse::Entry& e : browse::Updates())
+            if ((includeSkipped || !Skipped(e)) && (!forQuestion || (e.apps & mine))) out.push_back(e);
         return out;
+    }
+
+    // an editor asks once its window is up, nothing else is modal, no map is loading and no drag is in progress
+    bool ReadyToAsk()
+    {
+        if (app::IsLauncher()) return true;
+        HWND w = mt::MainWindow();
+        if (!w || !IsWindowVisible(w) || IsIconic(w) || !IsWindowEnabled(w)) return false;
+        if (app::IsRadiant() && (hooks::InMapLoad() || hooks::IsReloading() || hooks::MouseButtonHeld())) return false;
+        return true;
     }
 
     // MessageBox with our own button texts: a CBT hook renames Yes/No/Cancel when the box is created on this thread
@@ -260,19 +279,16 @@ namespace
 
     void AskPlugins(const std::vector<browse::Entry>& list)
     {
-        std::string q = list.size() == 1 ? "An update for one of your plugins is out:\n\n" : "Updates for " + std::to_string(list.size()) + " of your plugins are out:\n\n";
+        std::string q = std::string("Plugin updates for ") + (app::IsLauncher() ? "the launcher" : app::Name()) + ":\n\n";
         for (const browse::Entry& e : list)
         {
             std::string mine = plugins::InstalledVersion(e.name);
-            q += "    " + e.displayName + "  " + (mine.empty() ? "" : mine + " -> ") + e.version + (e.author.empty() ? "" : "  (" + e.author + ")") + "\n";
+            q += "    " + e.displayName + "  " + (mine.empty() ? "" : mine + " -> ") + e.version + "\n";
             if (!e.changes.empty()) q += "        " + e.changes + "\n";
         }
-        q += "\nUpdate all downloads them, checks every file against the plugin list and installs them. Your settings are kept.\n"
-             "Skip does not ask about these versions again (the Plugins window still offers them).\n"
-             "Later asks the next time the launcher starts.\n\n"
-             "To stop these questions, untick \"Ask about MTPlugins updates\" in the Plugins window (Plugins menu).";
+        q += "\nSkip ignores these versions. Turn these questions off in the Plugins window.";
         g_boxHook = SetWindowsHookExW(WH_CBT, BoxHook, nullptr, GetCurrentThreadId());
-        int r = Box(q, MB_YESNOCANCEL | MB_ICONINFORMATION);
+        int r = Box(q, MB_YESNOCANCEL | MB_ICONINFORMATION, L"Plugin updates");
         if (g_boxHook) { UnhookWindowsHookEx(g_boxHook); g_boxHook = nullptr; }
         std::vector<std::string> names;
         for (const browse::Entry& e : list) names.push_back(e.name);
@@ -297,7 +313,7 @@ namespace
         std::string t;
         for (const std::string& l : lines) t += l + "\n";
         SetPluginStatus("plugin updates done: " + std::to_string(lines.size()) + " result(s)");
-        Box("Plugin updates:\n\n" + t, MB_OK | MB_ICONINFORMATION);
+        Box(t, MB_OK | MB_ICONINFORMATION, L"Plugin updates");
     }
 
     bool InstalledCopy()       // <game>\bin\plugins\RadiantPlugins.dll, a dev build elsewhere does not ask
@@ -316,21 +332,27 @@ namespace update
     void SetEnabled(bool on)
     {
         WritePrivateProfileStringW(L"update", L"check", on ? L"1" : L"0", Cfg().iniPath.c_str());
-        LOG("update: questions %s", on ? "on" : "off");
+        LOG("update: release question %s", on ? "on" : "off");
+    }
+    // no key yet: follows [update] check, which switched both questions off before they were split
+    bool PluginsEnabled() { return GetPrivateProfileIntW(L"update", L"plugins", Enabled() ? 1 : 0, Cfg().iniPath.c_str()) != 0; }
+    void SetPluginsEnabled(bool on)
+    {
+        WritePrivateProfileStringW(L"update", L"plugins", on ? L"1" : L"0", Cfg().iniPath.c_str());
+        LOG("update: plugin update question %s", on ? "on" : "off");
     }
 
     void StartupCheck()
     {
         if (g_startupDone) return;
         g_startupDone = true;
-        if (!Enabled()) { SetStatus("switched off ([update] check=0)"); SetPluginStatus("switched off"); return; }
-        wchar_t index[16] = {};
-        GetPrivateProfileStringW(L"browse", L"index", L"", index, 16, Cfg().iniPath.c_str());
-        if (!app::IsLauncher()) { SetPluginStatus("asked in the launcher only"); return; }
-        bool dev = !InstalledCopy();
-        if (dev && !index[0]) SetPluginStatus("dev build: no check");
-        else { g_pluginsPending = true; SetPluginStatus("loading the plugin list"); if (!browse::Loaded()) browse::Refresh(); }
-        if (dev && Source().empty()) { SetStatus("dev build (host not in <game>\\bin\\plugins): no check"); return; }
+        // plugin updates: every app, dev builds too (only plugins installed from the list can be offered)
+        if (!PluginsEnabled()) SetPluginStatus("switched off ([update] plugins=0)");
+        else { g_pluginsPending = true; SetPluginStatus("loading the plugin list"); if (!browse::Loaded() && !browse::Loading()) browse::Refresh(); }
+        // MTPlugins release: the launcher only, installed copies only unless [update] url= is set
+        if (!app::IsLauncher()) { SetStatus("the release is checked in the launcher only"); return; }
+        if (!Enabled()) { SetStatus("switched off ([update] check=0)"); return; }
+        if (!InstalledCopy() && Source().empty()) { SetStatus("dev build (host not in <game>\\bin\\plugins): no check"); return; }
         StartCheck();
     }
 
@@ -338,6 +360,7 @@ namespace update
     {
         StartCheck();
         g_releaseAsked = false;
+        g_manual = true;
         g_pluginsPending = true;
         browse::Refresh();
     }
@@ -370,21 +393,31 @@ namespace update
         try
         {
             if (ph == Found) Ask(); else if (ph == Downloaded) Launch(); else if (ph == DownloadError) DownloadFailed();
-            else if (ph == Idle && g_pluginsPending && !browse::Loading())
+            else if (ph == Idle && g_pluginsPending && !browse::Loading() && ReadyToAsk())
             {
                 g_pluginsPending = false;
-                if (g_releaseAsked) SetPluginStatus("not asked: the MTPlugins release question came first");
-                else if (!browse::Loaded()) SetPluginStatus("no plugin list: " + browse::Message());
+                bool manual = g_manual;
+                g_manual = false;
+                std::vector<browse::Entry> list;
+                if (browse::Loaded()) list = PendingPlugins(manual, true);
+                if (g_releaseAsked && !manual) SetPluginStatus("not asked: the MTPlugins release question came first");
+                else if (!list.empty()) AskPlugins(list);
                 else
                 {
-                    std::vector<browse::Entry> list = PendingPlugins(false);
-                    if (list.empty()) SetPluginStatus("up to date");
-                    else AskPlugins(list);
+                    SetPluginStatus(browse::Loaded() ? "up to date" : "no plugin list: " + browse::Message());
+                    if (manual && !g_releaseAsked)
+                    {
+                        std::string rel;
+                        { std::lock_guard<std::mutex> lk(g_mu); rel = g_releaseLine; }
+                        std::string t = (rel.empty() ? "" : rel + "\n") +
+                            (browse::Loaded() ? "Your plugins are up to date." : "Could not load the plugin list (" + browse::Message() + ").");
+                        Box(t, MB_OK | MB_ICONINFORMATION, L"Check for updates");
+                    }
                 }
             }
             else if (g_pluginsInstalling && !browse::QueueBusy()) ReportPlugins();
         }
-        catch (...) { g_phase = Idle; g_pluginsPending = false; g_pluginsInstalling = false; }
+        catch (...) { g_phase = Idle; g_pluginsPending = false; g_pluginsInstalling = false; g_manual = false; }
         g_inTick = false;
     }
 
@@ -392,6 +425,6 @@ namespace update
     {
         static const char* names[] = { "idle", "checking", "found", "asking", "downloading", "downloaded", "download failed" };
         std::lock_guard<std::mutex> lk(g_mu);
-        return std::string("MTPlugins " MTPLUGINS_VERSION ", update questions ") + (Enabled() ? "on" : "off") + ", " + names[g_phase] + ": " + g_status;
+        return std::string("MTPlugins " MTPLUGINS_VERSION ", release question ") + (Enabled() ? "on" : "off") + ", plugin update question " + (PluginsEnabled() ? "on" : "off") + ", " + names[g_phase] + ": " + g_status;
     }
 }

@@ -5,6 +5,7 @@
 #include <fstream>
 #include <iomanip>
 #include <sstream>
+#include <regex>
 #include <stdexcept>
 
 namespace assetfiles
@@ -12,28 +13,30 @@ namespace assetfiles
     namespace
     {
         void Require(bool ok, const char* why) { if (!ok) throw std::runtime_error(why); }
-        struct Token { std::string value; size_t begin, end; bool quoted; };
-        std::vector<Token> Lex(const std::string& text)
+        // One GDT line the way gdtdb.exe reads it: quoted strings (a backslash skips
+        // the next character, escapes stay in the value) and bare ( ) [ ] are tokens, /* ends the line, anything else is ignored.
+        std::vector<std::string> LineTokens(const std::string& line, bool& overflow)
         {
-            std::vector<Token> out;
-            for (size_t i = 0; i < text.size();)
+            std::vector<std::string> t; size_t open = std::string::npos;
+            for (size_t i = 0; i < line.size(); ++i)
             {
-                if (isspace(static_cast<unsigned char>(text[i]))) { ++i; continue; }
-                if (text.compare(i, 2, "//") == 0) { i = text.find('\n', i); if (i == std::string::npos) break; continue; }
-                size_t begin = i;
-                if (text[i++] == '"')
+                char c = line[i];
+                if (open == std::string::npos)
                 {
-                    size_t end = text.find('"', i);
-                    Require(end != std::string::npos, "unterminated GDT string");
-                    out.push_back({text.substr(i, end - i), begin, end + 1, true}); i = end + 1;
+                    if (c == '"') open = i + 1;
+                    else if (c == '(' || c == ')' || c == '[' || c == ']') t.push_back(std::string(1, c));
+                    else if (c == '/' && i + 1 < line.size() && line[i + 1] == '*') break;
                 }
-                else out.push_back({text.substr(begin, 1), begin, i, false});
+                else if (c == '\\') ++i;
+                else if (c == '"') { t.push_back(line.substr(open, i - open)); open = std::string::npos; }
+                if (t.size() > 32) { overflow = true; break; }   // gdtdb's 32-slot line buffer: it stops reading the file there
             }
-            return out;
+            return t;
         }
         std::string Quote(const std::string& value)
         {
-            Require(value.find('"') == std::string::npos && value.find('\0') == std::string::npos, "invalid GDT value");
+            for (size_t i = 0; i < value.size(); ++i)
+                Require(value[i] != '\0' && (value[i] != '"' || (i > 0 && value[i - 1] == '\\')), "invalid GDT value");   // an escaped quote passes through
             return "\"" + value + "\"";
         }
         // A copy of one of the user's files that a streamed asset is about to replace, read back for verification. Only such files are
@@ -239,25 +242,34 @@ namespace assetfiles
         }
         return path;
     }
+    // gdtdb.exe's reader, line by line: a line starting with { is skipped, one starting with } commits the open entry, two tokens
+    // are a property, four a header ("name" ( "type.gdf" ) or "name" [ "parent" ]) that replaces an uncommitted entry, any other
+    // line is dropped. No outer braces exist. What gdt.db holds, this reads; what it drops, gdt.db dropped too.
     std::vector<Block> Parse(const std::string& text)
     {
-        auto t = Lex(text); std::vector<Block> out;
-        Require(t.size() >= 2 && t.front().value == "{" && t.back().value == "}", "invalid GDT envelope");
-        for (size_t i = 1; i + 1 < t.size();)
+        static const std::regex assetName("^([a-z_]+:)?(\\[[a-z]+\\])?[a-z0-9_/@$\\-+]+$");
+        std::vector<Block> out; Block open; bool named = false;
+        for (size_t pos = 0; pos < text.size();)
         {
-            Require(i + 5 < t.size() && t[i].quoted && (t[i + 1].value == "(" || t[i + 1].value == "["), "invalid GDT asset header");
-            Block b; b.begin = t[i].begin; b.name = Lower(t[i].value);
-            bool parent = t[i + 1].value == "[";
-            Require(t[i + 2].quoted && t[i + 3].value == (parent ? "]" : ")") && t[i + 4].value == "{", "invalid GDT asset type");
-            if (parent) b.parent = Lower(t[i + 2].value);
-            else { b.type = Lower(t[i + 2].value); if (b.type.size() > 4 && b.type.substr(b.type.size() - 4) == ".gdf") b.type.resize(b.type.size() - 4); }
-            i += 5;
-            while (i < t.size() && t[i].value != "}")
+            size_t eol = text.find_first_of("\r\n", pos); if (eol == std::string::npos) eol = text.size();
+            size_t next = eol < text.size() && text[eol] == '\r' && eol + 1 < text.size() && text[eol + 1] == '\n' ? eol + 2 : std::min(eol + 1, text.size());
+            size_t b = pos, e = eol; pos = next;
+            while (b < e && isspace(static_cast<unsigned char>(text[b]))) ++b;
+            while (e > b && isspace(static_cast<unsigned char>(text[e - 1]))) --e;
+            if (b == e || text[b] == '{') continue;
+            if (text[b] == '}')
             {
-                Require(i + 1 < t.size() && t[i].quoted && t[i + 1].quoted, "invalid GDT property");
-                b.values[t[i].value] = t[i + 1].value; i += 2;
+                if (named) { open.end = b + 1; out.push_back(std::move(open)); }
+                open = Block(); named = false; continue;
             }
-            Require(i + 1 < t.size(), "unterminated GDT asset"); b.end = t[i++].end; out.push_back(std::move(b));
+            bool overflow = false; auto t = LineTokens(text.substr(b, e - b), overflow);
+            if (overflow) break;
+            if (t.size() == 2) { if (named) open.values[t[0]] = t[1]; continue; }
+            const bool plain = t.size() == 4 && t[1] == "(" && t[3] == ")", derived = t.size() == 4 && t[1] == "[" && t[3] == "]";
+            if ((!plain && !derived) || !std::regex_match(t[0], assetName)) continue;
+            open = Block(); open.begin = b; open.name = t[0]; named = true;
+            if (derived) open.parent = Lower(t[2]);
+            else { open.type = Lower(t[2]); for (size_t p; (p = open.type.find(".gdf")) != std::string::npos;) open.type.erase(p, 4); }
         }
         return out;
     }
@@ -273,12 +285,16 @@ namespace assetfiles
         size_t matches = 0;
         for (const auto& b : blocks) if (b.name == block.name && (b.type == block.type || b.type.empty())) ++matches;
         Require(matches <= 1, "ambiguous or duplicate asset entries in destination GDT; retained unchanged");
-        bool found = false;
+        size_t lastEnd = 0; for (const auto& b : blocks) lastEnd = std::max(lastEnd, b.end);
+        const bool envelope = text.find('}', lastEnd) != std::string::npos;   // a closing brace after the last entry: insert before it
         for (auto i = blocks.rbegin(); i != blocks.rend(); ++i)
-            if (i->name == block.name && (i->type == block.type || i->type.empty()))
-            { result.erase(i->begin, i->end - i->begin); found = true; }
-        if (!remove) result.insert(result.find_last_of('}'), "\r\n" + Emit(block));
-        (void)found; return result;
+            if (i->name == block.name && (i->type == block.type || i->type.empty())) result.erase(i->begin, i->end - i->begin);
+        if (!remove)
+        {
+            if (envelope) result.insert(result.find_last_of('}'), "\r\n" + Emit(block));
+            else result += "\r\n" + Emit(block);   // no outer braces: inside the last entry's braces the header would replace that entry
+        }
+        return result;
     }
     // Asset names may start with a digit (ported packs: "0a7141f5_portal_button_blue"), plain numbers are not names.
     static bool Named(const std::string& token)

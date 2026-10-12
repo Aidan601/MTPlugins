@@ -197,5 +197,12 @@ int wmain(int argc, wchar_t** argv)
     if (opt.verify) opt.mode |= 1u << 8;
     if (GetPrivateProfileIntW(L"linker", L"skip_localized", 1, ini.c_str())) opt.mode |= 1u << 9;
     if (GetPrivateProfileIntW(L"linker", L"skip_sound_convert", 1, ini.c_str())) opt.mode |= 1u << 10;
+    if (GetPrivateProfileIntW(L"linker", L"raise_autolod_limit", 1, ini.c_str())) opt.mode |= 1u << 11;
+    if (GetPrivateProfileIntW(L"linker", L"repair_autolod_normals", 1, ini.c_str())) opt.mode |= 1u << 12;
+    if (GetPrivateProfileIntW(L"linker", L"meshopt_autolod", 1, ini.c_str())) opt.mode |= 1u << 13;
+    // the runtime DLL reads the auto LOD budget from the environment the linker inherits
+    const UINT autoLodBudget = GetPrivateProfileIntW(L"linker", L"autolod_budget_mb", 0, ini.c_str());
+    if (autoLodBudget && !GetEnvironmentVariableW(L"BB_AUTOLOD_BUDGET_MB", nullptr, 0))
+        SetEnvironmentVariableW(L"BB_AUTOLOD_BUDGET_MB", std::to_wstring(autoLodBudget).c_str());
     return Run(real, args, opt, pluginDir);
 }
