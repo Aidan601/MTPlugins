@@ -35,6 +35,7 @@ namespace
     using DrawIndexed_t   = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT, INT);
     using DrawIndexedInstanced_t = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT, UINT, INT, UINT);
     using DrawIndexedInstancedIndirect_t = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11Buffer*, UINT);
+    using PSSetShaderResources_t = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT, ID3D11ShaderResourceView* const*);
     using D3DCompile_t    = HRESULT(WINAPI*)(LPCVOID, SIZE_T, LPCSTR, const D3D_SHADER_MACRO*, ID3DInclude*, LPCSTR, LPCSTR, UINT, UINT, ID3DBlob**, ID3DBlob**);
 
     Present_t       o_Present = nullptr;
@@ -43,6 +44,7 @@ namespace
     DrawIndexed_t   o_DrawIndexed = nullptr;
     DrawIndexedInstanced_t o_DrawIndexedInstanced = nullptr;
     DrawIndexedInstancedIndirect_t o_DrawIndexedInstancedIndirect = nullptr;
+    PSSetShaderResources_t o_PSSetShaderResources = nullptr;
 
     std::mutex        g_mutex;
     render::View      g_view = render::View::None;
@@ -166,6 +168,43 @@ namespace
     std::map<ID3D11Device*, DeviceRes> g_res;
     std::map<IDXGISwapChain*, ID3D11RenderTargetView*> g_rtvs;
 
+    struct CameraLutPreviewData
+    {
+        UINT width = 0, height = 0;
+        std::shared_ptr<const std::vector<uint16_t>> referenceRgb;
+        std::shared_ptr<const std::vector<uint16_t>> previewRgb;
+        uint64_t generation = 0;
+        bool enabled = false;
+    };
+    std::shared_ptr<const CameraLutPreviewData> g_cameraLutData;
+    std::atomic<int> g_cameraLutStatus{ MODTOOLS_CAMERA_LUT_PREVIEW_OFF };
+    std::atomic<bool> g_cameraLutWasBound{ false };
+    std::atomic<bool> g_cameraDrawActive{ false };
+    std::atomic<bool> g_cameraLutHookReady{ false };
+    std::atomic<unsigned> g_cameraLutBindingLogCount{ 0 };
+    std::atomic<unsigned> g_cameraLutProbeLogCount{ 0 };
+    std::atomic<unsigned> g_cameraLutCamDrawLogCount{ 0 };
+    std::atomic<unsigned> g_cameraLutRejectedCount{ 0 };
+    std::atomic<unsigned> g_cameraLutFramesWithoutCandidate{ 0 };
+    std::atomic<bool> g_cameraLutNoMatchLogged{ false };
+
+    std::mutex g_cameraLutCandidateMutex;
+    std::vector<ID3D11ShaderResourceView*> g_cameraLutCandidates;
+    std::vector<ID3D11ShaderResourceView*> g_cameraLutRejectedCandidates;
+    std::unordered_set<ID3D11ShaderResourceView*> g_cameraLutCandidateSet;
+    std::mutex g_cameraLutResourceMutex;
+    ID3D11ShaderResourceView* g_cameraLutSourceView = nullptr;
+    ID3D11Resource* g_cameraLutSourceResource = nullptr;
+    ID3D11Texture2D* g_cameraLutReplacementTexture = nullptr;
+    ID3D11ShaderResourceView* g_cameraLutReplacementView = nullptr;
+    DXGI_FORMAT g_cameraLutTextureFormat = DXGI_FORMAT_UNKNOWN;
+    bool g_cameraLutFlipY = false;
+    bool g_cameraLutSwapRB = false;
+    ID3D11Device* g_cameraLutDevice = nullptr;
+    uint64_t g_cameraLutTextureGeneration = 0;
+    void* g_psSetShaderResourcesTarget = nullptr;
+    std::atomic<bool> g_psSetShaderResourcesSeen{ false };
+
     constexpr float kDeg = 3.14159265f / 180.0f;
 
     const char* kShader = R"(
@@ -228,6 +267,711 @@ float4 PS(PSIn i) : SV_Target { return i.col; }
         if (FAILED(dev->CreateBuffer(&bd, nullptr, &r.vb))) return false;
         r.vbCapacity = count + 512;
         return true;
+    }
+
+    bool CameraLutEnabled()
+    {
+        const std::shared_ptr<const CameraLutPreviewData> data = std::atomic_load(&g_cameraLutData);
+        return data && data->enabled && data->referenceRgb && data->previewRgb &&
+            !data->referenceRgb->empty() && !data->previewRgb->empty();
+    }
+
+    void QueueCameraLutCandidate(ID3D11ShaderResourceView* view)
+    {
+        if (!view) return;
+        {
+            std::lock_guard<std::mutex> lock(g_cameraLutCandidateMutex);
+            if (g_cameraLutCandidateSet.find(view) != g_cameraLutCandidateSet.end() || g_cameraLutCandidateSet.size() >= 256) return;
+        }
+        D3D11_SHADER_RESOURCE_VIEW_DESC viewDesc{};
+        view->GetDesc(&viewDesc);
+        if (viewDesc.ViewDimension != D3D11_SRV_DIMENSION_TEXTURE2D) return;
+        ID3D11Resource* resource = nullptr;
+        view->GetResource(&resource);
+        if (!resource) return;
+        ID3D11Texture2D* texture = nullptr;
+        HRESULT hr = resource->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&texture));
+        resource->Release();
+        if (FAILED(hr) || !texture) return;
+        D3D11_TEXTURE2D_DESC desc{};
+        texture->GetDesc(&desc);
+        texture->Release();
+        const std::shared_ptr<const CameraLutPreviewData> data = std::atomic_load(&g_cameraLutData);
+        if (!data || !data->enabled || desc.Width != data->width || desc.Height != data->height || desc.SampleDesc.Count != 1) return;
+
+        std::lock_guard<std::mutex> lock(g_cameraLutCandidateMutex);
+        if (g_cameraLutCandidateSet.size() >= 256 || !g_cameraLutCandidateSet.insert(view).second) return;
+        view->AddRef();
+        g_cameraLutCandidates.push_back(view);
+        g_cameraLutFramesWithoutCandidate.store(0, std::memory_order_release);
+        g_cameraLutNoMatchLogged.store(false, std::memory_order_release);
+        if (g_cameraLutStatus.load(std::memory_order_acquire) == MODTOOLS_CAMERA_LUT_PREVIEW_NO_MATCH)
+            g_cameraLutStatus.store(MODTOOLS_CAMERA_LUT_PREVIEW_WAITING, std::memory_order_release);
+    }
+
+    void STDMETHODCALLTYPE hk_PSSetShaderResources(ID3D11DeviceContext* ctx, UINT startSlot, UINT count,
+                                                      ID3D11ShaderResourceView* const* views)
+    {
+        g_psSetShaderResourcesSeen.store(true, std::memory_order_release);
+        g_cameraLutHookReady.store(true, std::memory_order_release);
+        if (!o_PSSetShaderResources) return;
+        if (ctx && views && count && g_cameraDrawActive.load(std::memory_order_acquire) && CameraLutEnabled())
+        {
+            const unsigned logIndex = g_cameraLutBindingLogCount.fetch_add(1, std::memory_order_relaxed);
+            if (logIndex < 8)
+            {
+                LOG("render: camera LUT observed PSSetShaderResources call %u (slot=%u count=%u)", logIndex + 1, startSlot, count);
+                for (UINT i = 0; i < count && i < 12; ++i)
+                {
+                    ID3D11ShaderResourceView* view = views[i];
+                    if (!view) continue;
+                    D3D11_SHADER_RESOURCE_VIEW_DESC viewDesc{};
+                    view->GetDesc(&viewDesc);
+                    ID3D11Resource* resource = nullptr;
+                    view->GetResource(&resource);
+                    ID3D11Texture2D* texture = nullptr;
+                    D3D11_TEXTURE2D_DESC textureDesc{};
+                    if (resource)
+                    {
+                        if (SUCCEEDED(resource->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&texture))) && texture)
+                            texture->GetDesc(&textureDesc);
+                        resource->Release();
+                    }
+                    LOG("render: camera LUT texture slot %u: dimension=%u format=%u size=%ux%u mips=%u", startSlot + i,
+                        static_cast<unsigned>(viewDesc.ViewDimension), static_cast<unsigned>(viewDesc.Format),
+                        textureDesc.Width, textureDesc.Height, textureDesc.MipLevels);
+                    if (texture) texture->Release();
+                }
+            }
+        }
+        if (!ctx || !views || count == 0 || !g_cameraDrawActive.load(std::memory_order_acquire) || !CameraLutEnabled())
+        {
+            o_PSSetShaderResources(ctx, startSlot, count, views);
+            return;
+        }
+
+        ID3D11ShaderResourceView* source = nullptr;
+        ID3D11ShaderResourceView* replacement = nullptr;
+        ID3D11Resource* sourceResource = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(g_cameraLutResourceMutex);
+            source = g_cameraLutSourceView;
+            replacement = g_cameraLutReplacementView;
+            sourceResource = g_cameraLutSourceResource;
+            if (source) source->AddRef();
+            if (replacement) replacement->AddRef();
+            if (sourceResource) sourceResource->AddRef();
+        }
+
+        bool substitute = false;
+        std::vector<ID3D11ShaderResourceView*> bound;
+        if (replacement && source)
+        {
+            for (UINT i = 0; i < count; ++i)
+            {
+                if (views[i] == source) { substitute = true; break; }
+                if (!views[i] || !sourceResource) continue;
+                ID3D11Resource* boundResource = nullptr;
+                views[i]->GetResource(&boundResource);
+                const bool sameResource = boundResource == sourceResource;
+                if (boundResource) boundResource->Release();
+                if (sameResource) { substitute = true; break; }
+            }
+        }
+        if (substitute)
+        {
+            bound.assign(views, views + count);
+            for (ID3D11ShaderResourceView*& view : bound)
+            {
+                if (view == source) { view = replacement; continue; }
+                if (!view || !sourceResource) continue;
+                ID3D11Resource* boundResource = nullptr;
+                view->GetResource(&boundResource);
+                const bool sameResource = boundResource == sourceResource;
+                if (boundResource) boundResource->Release();
+                if (sameResource) view = replacement;
+            }
+            o_PSSetShaderResources(ctx, startSlot, count, bound.data());
+            g_cameraLutWasBound.store(true, std::memory_order_release);
+            g_cameraLutStatus.store(MODTOOLS_CAMERA_LUT_PREVIEW_ACTIVE, std::memory_order_release);
+            if (sourceResource) sourceResource->Release();
+            source->Release();
+            replacement->Release();
+            return;
+        }
+        if (sourceResource) sourceResource->Release();
+        if (source) source->Release();
+        if (replacement) replacement->Release();
+
+        for (UINT i = 0; i < count; ++i) QueueCameraLutCandidate(views[i]);
+        o_PSSetShaderResources(ctx, startSlot, count, views);
+    }
+
+    float HalfToFloat(uint16_t half)
+    {
+        const uint32_t sign = uint32_t(half & 0x8000u) << 16;
+        uint32_t exponent = (half >> 10) & 0x1Fu;
+        uint32_t mantissa = half & 0x03FFu;
+        uint32_t bits = 0;
+        if (exponent == 0)
+        {
+            if (mantissa == 0) bits = sign;
+            else
+            {
+                int shift = 0;
+                while ((mantissa & 0x0400u) == 0) { mantissa <<= 1; ++shift; }
+                mantissa &= 0x03FFu;
+                bits = sign | (uint32_t(113 - shift) << 23) | (mantissa << 13);
+            }
+        }
+        else if (exponent == 31) bits = sign | 0x7F800000u | (mantissa << 13);
+        else bits = sign | ((exponent + 112u) << 23) | (mantissa << 13);
+        float value = 0.0f;
+        memcpy(&value, &bits, sizeof value);
+        return value;
+    }
+
+    uint16_t FloatToHalf(float value)
+    {
+        uint32_t bits = 0;
+        memcpy(&bits, &value, sizeof bits);
+        const uint16_t sign = static_cast<uint16_t>((bits >> 16) & 0x8000u);
+        const uint32_t exponent = (bits >> 23) & 0xFFu;
+        uint32_t mantissa = bits & 0x7FFFFFu;
+        if (exponent < 103) return sign;
+        if (exponent > 142) return static_cast<uint16_t>(sign | 0x7BFFu);
+        if (exponent < 113)
+        {
+            mantissa |= 0x800000u;
+            const unsigned shift = 126u - exponent;
+            const uint32_t rounded = (mantissa + (1u << (shift - 1))) >> shift;
+            return static_cast<uint16_t>(sign | rounded);
+        }
+        uint32_t halfExponent = exponent - 112u;
+        mantissa += 0x1000u;
+        if (mantissa & 0x800000u) { mantissa = 0; ++halfExponent; }
+        if (halfExponent >= 31u) return static_cast<uint16_t>(sign | 0x7BFFu);
+        return static_cast<uint16_t>(sign | (halfExponent << 10) | (mantissa >> 13));
+    }
+
+    bool ReadLutSample(const D3D11_MAPPED_SUBRESOURCE& mapped, DXGI_FORMAT format, UINT x, UINT y, float rgb[3])
+    {
+        const uint8_t* row = static_cast<const uint8_t*>(mapped.pData) + size_t(y) * mapped.RowPitch;
+        if (format == DXGI_FORMAT_R16G16B16A16_UNORM)
+        {
+            const uint16_t* px = reinterpret_cast<const uint16_t*>(row + size_t(x) * 8);
+            rgb[0] = px[0] / 65535.0f; rgb[1] = px[1] / 65535.0f; rgb[2] = px[2] / 65535.0f;
+            return true;
+        }
+        if (format == DXGI_FORMAT_R16G16B16A16_FLOAT)
+        {
+            const uint16_t* px = reinterpret_cast<const uint16_t*>(row + size_t(x) * 8);
+            rgb[0] = HalfToFloat(px[0]); rgb[1] = HalfToFloat(px[1]); rgb[2] = HalfToFloat(px[2]);
+            return true;
+        }
+        if (format == DXGI_FORMAT_R8G8B8A8_UNORM || format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB)
+        {
+            const uint8_t* px = row + size_t(x) * 4;
+            rgb[0] = px[0] / 255.0f; rgb[1] = px[1] / 255.0f; rgb[2] = px[2] / 255.0f;
+            return true;
+        }
+        if (format == DXGI_FORMAT_B8G8R8A8_UNORM || format == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB)
+        {
+            const uint8_t* px = row + size_t(x) * 4;
+            rgb[0] = px[2] / 255.0f; rgb[1] = px[1] / 255.0f; rgb[2] = px[0] / 255.0f;
+            return true;
+        }
+        if (format == DXGI_FORMAT_R10G10B10A2_UNORM)
+        {
+            uint32_t packed = 0;
+            memcpy(&packed, row + size_t(x) * 4, sizeof packed);
+            rgb[0] = float(packed & 0x3FFu) / 1023.0f;
+            rgb[1] = float((packed >> 10) & 0x3FFu) / 1023.0f;
+            rgb[2] = float((packed >> 20) & 0x3FFu) / 1023.0f;
+            return true;
+        }
+        return false;
+    }
+
+    bool MatchCameraLut(ID3D11Device* device, ID3D11DeviceContext* context, ID3D11ShaderResourceView* view,
+                        const CameraLutPreviewData& data, DXGI_FORMAT& matchedFormat,
+                        bool& matchedFlipY, bool& matchedSwapRB)
+    {
+        if (!device || !context || !view || data.width == 0 || data.height == 0) return false;
+        D3D11_SHADER_RESOURCE_VIEW_DESC viewDesc{};
+        view->GetDesc(&viewDesc);
+        if (viewDesc.ViewDimension != D3D11_SRV_DIMENSION_TEXTURE2D || viewDesc.Texture2D.MostDetailedMip != 0) return false;
+        ID3D11Resource* resource = nullptr;
+        view->GetResource(&resource);
+        if (!resource) return false;
+        ID3D11Texture2D* texture = nullptr;
+        HRESULT hr = resource->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&texture));
+        resource->Release();
+        if (FAILED(hr) || !texture) return false;
+
+        D3D11_TEXTURE2D_DESC sourceDesc{};
+        texture->GetDesc(&sourceDesc);
+        const UINT mip = viewDesc.Texture2D.MostDetailedMip;
+        const UINT width = (std::max)(1u, sourceDesc.Width >> mip);
+        const UINT height = (std::max)(1u, sourceDesc.Height >> mip);
+        if (width != data.width || height != data.height || sourceDesc.SampleDesc.Count != 1)
+        { texture->Release(); return false; }
+
+        D3D11_TEXTURE2D_DESC stagingDesc{};
+        stagingDesc.Width = width; stagingDesc.Height = height; stagingDesc.MipLevels = 1; stagingDesc.ArraySize = 1;
+        stagingDesc.Format = viewDesc.Format; stagingDesc.SampleDesc.Count = 1;
+        stagingDesc.Usage = D3D11_USAGE_STAGING; stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        ID3D11Texture2D* staging = nullptr;
+        hr = device->CreateTexture2D(&stagingDesc, nullptr, &staging);
+        if (SUCCEEDED(hr) && staging)
+            context->CopySubresourceRegion(staging, 0, 0, 0, 0, texture, D3D11CalcSubresource(mip, 0, sourceDesc.MipLevels), nullptr);
+        texture->Release();
+        if (FAILED(hr) || !staging) return false;
+
+        D3D11_MAPPED_SUBRESOURCE mapped{};
+        hr = context->Map(staging, 0, D3D11_MAP_READ, 0, &mapped);
+        if (FAILED(hr)) { staging->Release(); return false; }
+        double bestError = 1.0;
+        bool bestFlipY = false, bestSwapRB = false;
+        const UINT sampleStep = (std::max)(1u, data.width / 64);
+        for (int flipY = 0; flipY < 2; ++flipY)
+        for (int swapRB = 0; swapRB < 2; ++swapRB)
+        {
+            double sum = 0.0;
+            size_t samples = 0;
+            bool readable = true;
+            for (UINT y = 0; y < data.height; y += sampleStep)
+            for (UINT x = 0; x < data.width; x += sampleStep)
+            {
+                float actual[3]{};
+                if (!ReadLutSample(mapped, viewDesc.Format, x, flipY ? data.height - 1 - y : y, actual))
+                { readable = false; break; }
+                const size_t at = (size_t(y) * data.width + x) * 3;
+                const float expected[3] = { (*data.referenceRgb)[at] / 65535.0f, (*data.referenceRgb)[at + 1] / 65535.0f,
+                                             (*data.referenceRgb)[at + 2] / 65535.0f };
+                for (int c = 0; c < 3; ++c)
+                {
+                    const float a = actual[swapRB && c != 1 ? 2 - c : c];
+                    const double delta = double(a - expected[c]);
+                    sum += delta * delta;
+                }
+                ++samples;
+            }
+            if (readable && samples)
+            {
+                const double error = std::sqrt(sum / (samples * 3.0));
+                if (error < bestError)
+                {
+                    bestError = error;
+                    bestFlipY = flipY != 0;
+                    bestSwapRB = swapRB != 0;
+                }
+            }
+        }
+        context->Unmap(staging, 0);
+        staging->Release();
+        const double tolerance = (viewDesc.Format == DXGI_FORMAT_R16G16B16A16_UNORM ||
+                                  viewDesc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT) ? 0.012 : 0.022;
+        if (bestError > tolerance) return false;
+        matchedFormat = viewDesc.Format;
+        matchedFlipY = bestFlipY;
+        matchedSwapRB = bestSwapRB;
+        return true;
+    }
+
+    bool BuildCameraLutBytes(const std::vector<uint16_t>& rgb, UINT width, UINT height, DXGI_FORMAT format,
+                             std::vector<uint8_t>& bytes, UINT& rowPitch)
+    {
+        const bool rgba16 = format == DXGI_FORMAT_R16G16B16A16_UNORM;
+        const bool rgba16Float = format == DXGI_FORMAT_R16G16B16A16_FLOAT;
+        const bool rgba8 = format == DXGI_FORMAT_R8G8B8A8_UNORM || format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+        const bool bgra8 = format == DXGI_FORMAT_B8G8R8A8_UNORM || format == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
+        const bool rgb10a2 = format == DXGI_FORMAT_R10G10B10A2_UNORM;
+        if (!rgba16 && !rgba16Float && !rgba8 && !bgra8 && !rgb10a2) return false;
+
+        const size_t pixelCount = size_t(width) * height;
+        const size_t bytesPerPixel = (rgba16 || rgba16Float) ? 8 : 4;
+        bytes.resize(pixelCount * bytesPerPixel);
+        rowPitch = width * static_cast<UINT>(bytesPerPixel);
+        for (size_t i = 0; i < pixelCount; ++i)
+        {
+            const uint16_t* src = rgb.data() + i * 3;
+            if (rgba16 || rgba16Float)
+            {
+                uint16_t* dst = reinterpret_cast<uint16_t*>(bytes.data()) + i * 4;
+                dst[0] = rgba16 ? src[0] : FloatToHalf(src[0] / 65535.0f);
+                dst[1] = rgba16 ? src[1] : FloatToHalf(src[1] / 65535.0f);
+                dst[2] = rgba16 ? src[2] : FloatToHalf(src[2] / 65535.0f);
+                dst[3] = rgba16 ? 65535 : 0x3C00;
+            }
+            else
+            {
+                if (rgb10a2)
+                {
+                    const uint32_t r = (uint32_t(src[0]) * 1023u + 32767u) / 65535u;
+                    const uint32_t g = (uint32_t(src[1]) * 1023u + 32767u) / 65535u;
+                    const uint32_t b = (uint32_t(src[2]) * 1023u + 32767u) / 65535u;
+                    const uint32_t packed = r | (g << 10) | (b << 20) | (3u << 30);
+                    memcpy(bytes.data() + i * 4, &packed, sizeof packed);
+                }
+                else
+                {
+                    uint8_t* dst = bytes.data() + i * 4;
+                    dst[0] = static_cast<uint8_t>((src[bgra8 ? 2 : 0] + 128) / 257);
+                    dst[1] = static_cast<uint8_t>((src[1] + 128) / 257);
+                    dst[2] = static_cast<uint8_t>((src[bgra8 ? 0 : 2] + 128) / 257);
+                    dst[3] = 255;
+                }
+            }
+        }
+        return true;
+    }
+
+    bool BuildCameraLutMipChain(const std::vector<uint16_t>& baseRgb, UINT baseWidth, UINT baseHeight,
+                                UINT mipCount, DXGI_FORMAT format, bool flipY, bool swapRB,
+                                std::vector<std::vector<uint8_t>>& mipBytes,
+                                std::vector<UINT>& rowPitches)
+    {
+        if (baseRgb.size() != size_t(baseWidth) * baseHeight * 3 || mipCount == 0) return false;
+        std::vector<uint16_t> rgb(baseRgb.size());
+        for (UINT y = 0; y < baseHeight; ++y)
+        for (UINT x = 0; x < baseWidth; ++x)
+        {
+            const UINT dstY = flipY ? baseHeight - 1 - y : y;
+            const size_t src = (size_t(y) * baseWidth + x) * 3;
+            const size_t dst = (size_t(dstY) * baseWidth + x) * 3;
+            rgb[dst] = baseRgb[src + (swapRB ? 2 : 0)];
+            rgb[dst + 1] = baseRgb[src + 1];
+            rgb[dst + 2] = baseRgb[src + (swapRB ? 0 : 2)];
+        }
+        UINT width = baseWidth, height = baseHeight;
+        mipBytes.clear(); rowPitches.clear();
+        mipBytes.reserve(mipCount); rowPitches.reserve(mipCount);
+        for (UINT mip = 0; mip < mipCount; ++mip)
+        {
+            mipBytes.emplace_back();
+            UINT pitch = 0;
+            if (!BuildCameraLutBytes(rgb, width, height, format, mipBytes.back(), pitch)) return false;
+            rowPitches.push_back(pitch);
+            if (mip + 1 == mipCount) break;
+            const UINT nextWidth = (std::max)(1u, width / 2);
+            const UINT nextHeight = (std::max)(1u, height / 2);
+            std::vector<uint16_t> next(size_t(nextWidth) * nextHeight * 3);
+            for (UINT y = 0; y < nextHeight; ++y)
+            for (UINT x = 0; x < nextWidth; ++x)
+            for (UINT channel = 0; channel < 3; ++channel)
+            {
+                uint32_t sum = 0, samples = 0;
+                for (UINT oy = 0; oy < 2; ++oy)
+                for (UINT ox = 0; ox < 2; ++ox)
+                {
+                    const UINT sx = (std::min)(width - 1, x * 2 + ox);
+                    const UINT sy = (std::min)(height - 1, y * 2 + oy);
+                    sum += rgb[(size_t(sy) * width + sx) * 3 + channel];
+                    ++samples;
+                }
+                next[(size_t(y) * nextWidth + x) * 3 + channel] = static_cast<uint16_t>((sum + samples / 2) / samples);
+            }
+            rgb = std::move(next);
+            width = nextWidth; height = nextHeight;
+        }
+        return true;
+    }
+
+    bool UpdateCameraLutReplacement(ID3D11DeviceContext* context, ID3D11Texture2D* texture,
+                                    DXGI_FORMAT format, bool flipY, bool swapRB,
+                                    const CameraLutPreviewData& data)
+    {
+        if (!context || !texture || !data.previewRgb) return false;
+        std::vector<std::vector<uint8_t>> mipBytes;
+        std::vector<UINT> rowPitches;
+        D3D11_TEXTURE2D_DESC desc{};
+        texture->GetDesc(&desc);
+        if (desc.Width != data.width || desc.Height != data.height || desc.MipLevels == 0) return false;
+        if (!BuildCameraLutMipChain(*data.previewRgb, data.width, data.height, desc.MipLevels,
+                                    format, flipY, swapRB, mipBytes, rowPitches)) return false;
+        for (UINT mip = 0; mip < desc.MipLevels; ++mip)
+            context->UpdateSubresource(texture, mip, nullptr, mipBytes[mip].data(), rowPitches[mip], 0);
+        return true;
+    }
+
+    bool CreateCameraLutReplacement(ID3D11Device* device, ID3D11ShaderResourceView* sourceView,
+                                    const CameraLutPreviewData& data, ID3D11ShaderResourceView** output,
+                                    ID3D11Resource** sourceResource, ID3D11Texture2D** outputTexture,
+                                    bool flipY, bool swapRB)
+    {
+        if (output) *output = nullptr;
+        if (sourceResource) *sourceResource = nullptr;
+        if (outputTexture) *outputTexture = nullptr;
+        if (!device || !sourceView || !output || !sourceResource || !outputTexture) return false;
+        D3D11_SHADER_RESOURCE_VIEW_DESC sourceViewDesc{};
+        sourceView->GetDesc(&sourceViewDesc);
+        if (sourceViewDesc.ViewDimension != D3D11_SRV_DIMENSION_TEXTURE2D) return false;
+        ID3D11Resource* resource = nullptr;
+        sourceView->GetResource(&resource);
+        if (!resource) return false;
+        ID3D11Texture2D* sourceTexture = nullptr;
+        HRESULT hr = resource->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&sourceTexture));
+        if (FAILED(hr) || !sourceTexture) { resource->Release(); return false; }
+        D3D11_TEXTURE2D_DESC sourceDesc{};
+        sourceTexture->GetDesc(&sourceDesc);
+        if (sourceViewDesc.Texture2D.MostDetailedMip != 0 || sourceDesc.Width != data.width ||
+            sourceDesc.Height != data.height || sourceDesc.SampleDesc.Count != 1 || sourceDesc.MipLevels == 0)
+        { sourceTexture->Release(); resource->Release(); return false; }
+
+        const DXGI_FORMAT format = sourceViewDesc.Format;
+        std::vector<std::vector<uint8_t>> mipBytes;
+        std::vector<UINT> rowPitches;
+        const UINT mipCount = sourceDesc.MipLevels;
+        if (!BuildCameraLutMipChain(*data.previewRgb, data.width, data.height, mipCount,
+                                    format, flipY, swapRB, mipBytes, rowPitches))
+        { sourceTexture->Release(); resource->Release(); return false; }
+
+        D3D11_TEXTURE2D_DESC targetDesc{};
+        targetDesc.Width = data.width; targetDesc.Height = data.height; targetDesc.MipLevels = mipCount; targetDesc.ArraySize = 1;
+        targetDesc.Format = format; targetDesc.SampleDesc.Count = 1; targetDesc.Usage = D3D11_USAGE_DEFAULT;
+        targetDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        std::vector<D3D11_SUBRESOURCE_DATA> initial(mipCount);
+        for (UINT mip = 0; mip < mipCount; ++mip)
+        {
+            initial[mip].pSysMem = mipBytes[mip].data();
+            initial[mip].SysMemPitch = rowPitches[mip];
+        }
+        ID3D11Texture2D* targetTexture = nullptr;
+        hr = device->CreateTexture2D(&targetDesc, initial.data(), &targetTexture);
+        if (SUCCEEDED(hr) && targetTexture)
+        {
+            D3D11_SHADER_RESOURCE_VIEW_DESC targetViewDesc{};
+            targetViewDesc.Format = format; targetViewDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+            targetViewDesc.Texture2D.MipLevels = sourceViewDesc.Texture2D.MipLevels == UINT(-1) ||
+                sourceViewDesc.Texture2D.MipLevels == 0
+                ? mipCount : (std::min)(mipCount, sourceViewDesc.Texture2D.MipLevels);
+            hr = device->CreateShaderResourceView(targetTexture, &targetViewDesc, output);
+        }
+        sourceTexture->Release();
+        if (FAILED(hr) || !*output || !targetTexture) { if (targetTexture) targetTexture->Release(); resource->Release(); return false; }
+        *sourceResource = resource;
+        *outputTexture = targetTexture;
+        return true;
+    }
+
+    void ClearCameraLutResources()
+    {
+        {
+            std::lock_guard<std::mutex> lock(g_cameraLutResourceMutex);
+            if (g_cameraLutSourceView) g_cameraLutSourceView->Release();
+            if (g_cameraLutSourceResource) g_cameraLutSourceResource->Release();
+            if (g_cameraLutReplacementTexture) g_cameraLutReplacementTexture->Release();
+            if (g_cameraLutReplacementView) g_cameraLutReplacementView->Release();
+            if (g_cameraLutDevice) g_cameraLutDevice->Release();
+            g_cameraLutSourceView = nullptr; g_cameraLutSourceResource = nullptr;
+            g_cameraLutReplacementTexture = nullptr; g_cameraLutReplacementView = nullptr;
+            g_cameraLutTextureFormat = DXGI_FORMAT_UNKNOWN; g_cameraLutDevice = nullptr;
+            g_cameraLutFlipY = false; g_cameraLutSwapRB = false;
+            g_cameraLutTextureGeneration = 0;
+        }
+        g_cameraLutWasBound.store(false, std::memory_order_release);
+        g_cameraLutFramesWithoutCandidate.store(0, std::memory_order_release);
+        g_cameraLutNoMatchLogged.store(false, std::memory_order_release);
+        std::vector<ID3D11ShaderResourceView*> candidates;
+        std::vector<ID3D11ShaderResourceView*> rejected;
+        {
+            std::lock_guard<std::mutex> lock(g_cameraLutCandidateMutex);
+            candidates.swap(g_cameraLutCandidates);
+            rejected.swap(g_cameraLutRejectedCandidates);
+            g_cameraLutCandidateSet.clear();
+        }
+        for (ID3D11ShaderResourceView* view : candidates) if (view) view->Release();
+        for (ID3D11ShaderResourceView* view : rejected) if (view) view->Release();
+        g_cameraLutRejectedCount.store(0, std::memory_order_release);
+    }
+
+    void ProcessCameraLutPreview(ID3D11Device* device, ID3D11DeviceContext* context)
+    {
+        const std::shared_ptr<const CameraLutPreviewData> data = std::atomic_load(&g_cameraLutData);
+        if (!data || !data->enabled)
+        {
+            ClearCameraLutResources();
+            g_cameraLutStatus.store(MODTOOLS_CAMERA_LUT_PREVIEW_OFF, std::memory_order_release);
+            return;
+        }
+        if (!device || !context || !data->referenceRgb || !data->previewRgb ||
+            data->referenceRgb->empty() || data->previewRgb->empty())
+        {
+            g_cameraLutStatus.store(MODTOOLS_CAMERA_LUT_PREVIEW_UNSUPPORTED, std::memory_order_release);
+            return;
+        }
+
+        ID3D11ShaderResourceView* sourceView = nullptr;
+        bool newSource = false;
+        bool sourceFlipY = false, sourceSwapRB = false;
+        {
+            std::lock_guard<std::mutex> lock(g_cameraLutResourceMutex);
+            if (g_cameraLutSourceView)
+            {
+                if (g_cameraLutTextureGeneration == data->generation)
+                {
+                    g_cameraLutStatus.store(g_cameraLutWasBound.load(std::memory_order_acquire)
+                        ? MODTOOLS_CAMERA_LUT_PREVIEW_ACTIVE : MODTOOLS_CAMERA_LUT_PREVIEW_MATCHED, std::memory_order_release);
+                    return;
+                }
+                sourceView = g_cameraLutSourceView;
+                sourceFlipY = g_cameraLutFlipY;
+                sourceSwapRB = g_cameraLutSwapRB;
+                sourceView->AddRef();
+            }
+        }
+
+        // A camera frame may bind many 1024x1024 images before Present. Probe a small bounded batch
+        // per frame so the world LUT is found quickly without stalling the camera render loop.
+        for (unsigned attempt = 0; !sourceView && attempt < 8; ++attempt)
+        {
+            ID3D11ShaderResourceView* candidate = nullptr;
+            {
+                std::lock_guard<std::mutex> lock(g_cameraLutCandidateMutex);
+                if (!g_cameraLutCandidates.empty())
+                {
+                    candidate = g_cameraLutCandidates.front();
+                    g_cameraLutCandidates.erase(g_cameraLutCandidates.begin());
+                }
+            }
+            if (!candidate) break;
+            DXGI_FORMAT matchedFormat = DXGI_FORMAT_UNKNOWN;
+            const bool matched = MatchCameraLut(device, context, candidate, *data, matchedFormat,
+                                                sourceFlipY, sourceSwapRB);
+            if (matched)
+            {
+                sourceView = candidate; // transfer the candidate's reference to the preview state below
+                newSource = true;
+                LOG("render: matched the world LUT image (format=%u)", static_cast<unsigned>(matchedFormat));
+                break;
+            }
+            const unsigned logIndex = g_cameraLutProbeLogCount.fetch_add(1, std::memory_order_relaxed);
+            if (logIndex < 16)
+            {
+                D3D11_SHADER_RESOURCE_VIEW_DESC viewDesc{};
+                candidate->GetDesc(&viewDesc);
+                ID3D11Resource* resource = nullptr;
+                candidate->GetResource(&resource);
+                ID3D11Texture2D* texture = nullptr;
+                D3D11_TEXTURE2D_DESC textureDesc{};
+                if (resource && SUCCEEDED(resource->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&texture))) && texture)
+                    texture->GetDesc(&textureDesc);
+                LOG("render: camera LUT probe %u did not match (view=%u format=%u size=%ux%u)", logIndex + 1,
+                    static_cast<unsigned>(viewDesc.ViewDimension), static_cast<unsigned>(viewDesc.Format),
+                    textureDesc.Width, textureDesc.Height);
+                if (texture) texture->Release();
+                if (resource) resource->Release();
+            }
+            std::lock_guard<std::mutex> lock(g_cameraLutCandidateMutex);
+            g_cameraLutRejectedCandidates.push_back(candidate); // keep it alive and don't read it back again
+            g_cameraLutRejectedCount.fetch_add(1, std::memory_order_relaxed);
+        }
+
+        if (sourceView && !newSource)
+        {
+            ID3D11Texture2D* replacementTexture = nullptr;
+            DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+            {
+                std::lock_guard<std::mutex> lock(g_cameraLutResourceMutex);
+                replacementTexture = g_cameraLutReplacementTexture;
+                format = g_cameraLutTextureFormat;
+                sourceFlipY = g_cameraLutFlipY;
+                sourceSwapRB = g_cameraLutSwapRB;
+                if (replacementTexture) replacementTexture->AddRef();
+            }
+            const bool updated = replacementTexture && UpdateCameraLutReplacement(context, replacementTexture, format,
+                                                                                   sourceFlipY, sourceSwapRB, *data);
+            if (replacementTexture) replacementTexture->Release();
+            if (updated)
+            {
+                std::lock_guard<std::mutex> lock(g_cameraLutResourceMutex);
+                if (g_cameraLutSourceView == sourceView)
+                {
+                    g_cameraLutTextureGeneration = data->generation;
+                    g_cameraLutWasBound.store(false, std::memory_order_release);
+                    g_cameraLutStatus.store(MODTOOLS_CAMERA_LUT_PREVIEW_MATCHED, std::memory_order_release);
+                    LOG("render: updated the camera LUT texture in memory (generation=%llu)",
+                        static_cast<unsigned long long>(data->generation));
+                }
+            }
+            else
+            {
+                g_cameraLutStatus.store(MODTOOLS_CAMERA_LUT_PREVIEW_UNSUPPORTED, std::memory_order_release);
+                LOG("render: couldn't update the in-memory camera LUT texture");
+            }
+            sourceView->Release();
+            return;
+        }
+
+        if (sourceView)
+        {
+            ID3D11ShaderResourceView* replacementView = nullptr;
+            ID3D11Resource* sourceResource = nullptr;
+            ID3D11Texture2D* replacementTexture = nullptr;
+            if (CreateCameraLutReplacement(device, sourceView, *data, &replacementView, &sourceResource,
+                                           &replacementTexture, sourceFlipY, sourceSwapRB))
+            {
+                std::lock_guard<std::mutex> lock(g_cameraLutResourceMutex);
+                if (g_cameraLutReplacementTexture) g_cameraLutReplacementTexture->Release();
+                if (g_cameraLutReplacementView) g_cameraLutReplacementView->Release();
+                if (g_cameraLutSourceResource) g_cameraLutSourceResource->Release();
+                if (newSource)
+                {
+                    if (g_cameraLutSourceView) g_cameraLutSourceView->Release();
+                    {
+                        std::lock_guard<std::mutex> candidateLock(g_cameraLutCandidateMutex);
+                        g_cameraLutCandidateSet.erase(sourceView);
+                    }
+                    g_cameraLutSourceView = sourceView; // transfer candidate's owned reference
+                    sourceView = nullptr;
+                    if (g_cameraLutDevice) g_cameraLutDevice->Release();
+                    g_cameraLutDevice = device; device->AddRef();
+                }
+                g_cameraLutSourceResource = sourceResource;
+                g_cameraLutReplacementTexture = replacementTexture;
+                g_cameraLutReplacementView = replacementView;
+                D3D11_SHADER_RESOURCE_VIEW_DESC sourceViewDesc{};
+                g_cameraLutSourceView->GetDesc(&sourceViewDesc);
+                g_cameraLutTextureFormat = sourceViewDesc.Format;
+                g_cameraLutFlipY = sourceFlipY;
+                g_cameraLutSwapRB = sourceSwapRB;
+                g_cameraLutTextureGeneration = data->generation;
+                g_cameraLutWasBound.store(false, std::memory_order_release);
+                g_cameraLutStatus.store(MODTOOLS_CAMERA_LUT_PREVIEW_MATCHED, std::memory_order_release);
+            }
+            else if (newSource)
+            {
+                g_cameraLutStatus.store(MODTOOLS_CAMERA_LUT_PREVIEW_UNSUPPORTED, std::memory_order_release);
+                LOG("render: matched the world LUT but could not create its replacement texture");
+                std::lock_guard<std::mutex> candidateLock(g_cameraLutCandidateMutex);
+                g_cameraLutRejectedCandidates.push_back(sourceView);
+                sourceView = nullptr; // keep the reference so this unsupported match isn't retried
+            }
+            if (sourceView) sourceView->Release();
+        }
+        else if (g_cameraLutStatus.load(std::memory_order_acquire) != MODTOOLS_CAMERA_LUT_PREVIEW_UNSUPPORTED)
+        {
+            std::lock_guard<std::mutex> candidateLock(g_cameraLutCandidateMutex);
+            const bool exhausted = g_cameraLutCandidates.empty() &&
+                g_cameraLutRejectedCount.load(std::memory_order_relaxed) != 0;
+            if (exhausted)
+            {
+                g_cameraLutStatus.store(MODTOOLS_CAMERA_LUT_PREVIEW_NO_MATCH, std::memory_order_release);
+            }
+            else if (g_cameraLutCandidates.empty())
+            {
+                const unsigned frames = g_cameraLutFramesWithoutCandidate.fetch_add(1, std::memory_order_acq_rel) + 1;
+                if (frames >= 60)
+                {
+                    g_cameraLutStatus.store(MODTOOLS_CAMERA_LUT_PREVIEW_NO_MATCH, std::memory_order_release);
+                    if (!g_cameraLutNoMatchLogged.exchange(true, std::memory_order_acq_rel))
+                        LOG("render: no camera LUT texture matching %ux%u was bound during 60 camera frames; worldspawn LUT preview cannot be applied", data->width, data->height);
+                }
+                else g_cameraLutStatus.store(MODTOOLS_CAMERA_LUT_PREVIEW_WAITING, std::memory_order_release);
+            }
+            else g_cameraLutStatus.store(MODTOOLS_CAMERA_LUT_PREVIEW_WAITING, std::memory_order_release);
+        }
     }
 
     void AngleVectors(const float angles[3], float fwd[3], float right[3], float up[3])
@@ -1872,6 +2616,7 @@ float4 PS(PSIn i) : SV_Target { return i.col; }
         const void* drawIndexed = vtable[12];
         const void* drawIndexedInstanced = vtable[20];
         const void* drawIndexedIndirect = vtable[39];
+        const void* psSetShaderResources = vtable[8];
         context->Release();
 
         if (!g_nativeLoggedLiveDevice)
@@ -1885,6 +2630,8 @@ float4 PS(PSIn i) : SV_Target { return i.col; }
             reinterpret_cast<void**>(&o_DrawIndexedInstanced), g_nativeDrawIndexedInstancedSeen, "DrawIndexedInstanced");
         RetargetNativeDrawHook(drawIndexedIndirect, &g_nativeDrawIndexedIndirectTarget, reinterpret_cast<void*>(&hk_DrawIndexedInstancedIndirect),
             reinterpret_cast<void**>(&o_DrawIndexedInstancedIndirect), g_nativeDrawIndexedIndirectSeen, "DrawIndexedInstancedIndirect");
+        RetargetNativeDrawHook(psSetShaderResources, &g_psSetShaderResourcesTarget, reinterpret_cast<void*>(&hk_PSSetShaderResources),
+            reinterpret_cast<void**>(&o_PSSetShaderResources), g_psSetShaderResourcesSeen, "PSSetShaderResources");
     }
 
     void PushScreenLine(float x0, float y0, float x1, float y1, uint32_t rgba)
@@ -2027,6 +2774,12 @@ float4 PS(PSIn i) : SV_Target { return i.col; }
         DXGI_SWAP_CHAIN_DESC desc{}; sc->GetDesc(&desc);
         float w = float(desc.BufferDesc.Width), h = float(desc.BufferDesc.Height);
         if (g_view == render::View::Cam) { g_cam.width = int(w); g_cam.height = int(h); g_camHwnd = desc.OutputWindow; }
+        if (g_view == render::View::Cam)
+        {
+            ID3D11DeviceContext* lutContext = nullptr;
+            dev->GetImmediateContext(&lutContext);
+            if (lutContext) { ProcessCameraLutPreview(dev, lutContext); lutContext->Release(); }
+        }
 
         // let every plugin add its lines and labels (the cam frame was already built in the HUD pass when it ran)
         bool prebuilt = g_view == render::View::Cam && g_camPrebuiltReady;
@@ -2181,6 +2934,7 @@ namespace render
         void* pDrawIndexed = contextVtbl[12];
         void* pDrawIndexedInstanced = contextVtbl[20];
         void* pDrawIndexedInstancedIndirect = contextVtbl[39];
+        void* pPSSetShaderResources = contextVtbl[8];
         sc->Release(); ctx->Release(); dev->Release(); DestroyWindow(hwnd);
 
         bool ok = MH_CreateHook(pPresent, &hk_Present, reinterpret_cast<void**>(&o_Present)) == MH_OK && MH_EnableHook(pPresent) == MH_OK;
@@ -2193,9 +2947,13 @@ namespace render
             MH_EnableHook(pDrawIndexedInstanced) == MH_OK;
         const bool indirectHooked = MH_CreateHook(pDrawIndexedInstancedIndirect, &hk_DrawIndexedInstancedIndirect, reinterpret_cast<void**>(&o_DrawIndexedInstancedIndirect)) == MH_OK &&
             MH_EnableHook(pDrawIndexedInstancedIndirect) == MH_OK;
+        const bool lutHooked = MH_CreateHook(pPSSetShaderResources, &hk_PSSetShaderResources, reinterpret_cast<void**>(&o_PSSetShaderResources)) == MH_OK &&
+            MH_EnableHook(pPSSetShaderResources) == MH_OK;
+        g_cameraLutHookReady.store(lutHooked, std::memory_order_release);
         g_nativeDrawIndexedTarget = pDrawIndexed;
         g_nativeDrawIndexedInstancedTarget = pDrawIndexedInstanced;
         g_nativeDrawIndexedIndirectTarget = pDrawIndexedInstancedIndirect;
+        g_psSetShaderResourcesTarget = pPSSetShaderResources;
         {
             std::lock_guard<std::mutex> lock(g_nativeMutex);
             g_nativeHooksReady = layoutHooked && drawHooked && instancedHooked;
@@ -2203,11 +2961,69 @@ namespace render
                 request.status = g_nativeHooksReady ? MODTOOLS_NATIVE_PREVIEW_WAITING : MODTOOLS_NATIVE_PREVIEW_UNAVAILABLE;
         }
         LOG("render: dxgi hooks %s (Present=0x%p ResizeBuffers=0x%p)", ok ? "installed" : "FAILED", pPresent, pResize);
+        LOG("render: in-memory camera LUT resource hook %s (PSSetShaderResources=0x%p)", lutHooked ? "ready" : "unavailable", pPSSetShaderResources);
         LOG("render: native material preview %s (CreateInputLayout=0x%p DrawIndexed=0x%p DrawIndexedInstanced=0x%p DrawIndexedInstancedIndirect=0x%p indirect=%s)", g_nativeHooksReady ? "ready" : "unavailable", pCreateInputLayout, pDrawIndexed, pDrawIndexedInstanced, pDrawIndexedInstancedIndirect, indirectHooked ? "yes" : "no");
         return ok;
     }
 
     void Shutdown() {}
+
+    void SetCameraLutPreview(const ModToolsCameraLutPreview* preview)
+    {
+        std::shared_ptr<const CameraLutPreviewData> old = std::atomic_load(&g_cameraLutData);
+        std::shared_ptr<CameraLutPreviewData> next = std::make_shared<CameraLutPreviewData>();
+        if (old) *next = *old;
+        bool unsupported = false;
+        if (preview && preview->size >= offsetof(ModToolsCameraLutPreview, enabled) + sizeof(preview->enabled))
+        {
+            if (preview->width) next->width = preview->width;
+            if (preview->height) next->height = preview->height;
+            const bool dimensionsOk = next->width > 0 && next->height > 0 && next->width <= 1024 && next->height <= 1024;
+            const size_t values = dimensionsOk ? size_t(next->width) * next->height * 3 : 0;
+            if (!dimensionsOk) unsupported = preview->enabled != 0;
+            if (preview->referenceRgb && values)
+                next->referenceRgb = std::make_shared<const std::vector<uint16_t>>(preview->referenceRgb, preview->referenceRgb + values);
+            if (preview->previewRgb && values)
+                next->previewRgb = std::make_shared<const std::vector<uint16_t>>(preview->previewRgb, preview->previewRgb + values);
+            next->enabled = preview->enabled != 0;
+        }
+        else next->enabled = false;
+
+        const size_t expected = next->width <= 1024 && next->height <= 1024 ? size_t(next->width) * next->height * 3 : 0;
+        if (next->enabled && (!expected ||
+            (next->referenceRgb && next->referenceRgb->size() != expected) ||
+            (next->previewRgb && next->previewRgb->size() != expected)))
+        {
+            next->enabled = false;
+            unsupported = true;
+        }
+        next->generation = old ? old->generation + 1 : 1;
+        std::atomic_store(&g_cameraLutData, std::shared_ptr<const CameraLutPreviewData>(next));
+        LOG("render: camera LUT preview request enabled=%d size=%ux%u generation=%llu reference=%s preview=%s",
+            next->enabled ? 1 : 0, next->width, next->height,
+            static_cast<unsigned long long>(next->generation),
+            next->referenceRgb && !next->referenceRgb->empty() ? "yes" : "no",
+            next->previewRgb && !next->previewRgb->empty() ? "yes" : "no");
+        g_cameraLutWasBound.store(false, std::memory_order_release);
+        if (!next->enabled) ClearCameraLutResources();
+        else if (preview && preview->referenceRgb) ClearCameraLutResources();
+        if (unsupported)
+            g_cameraLutStatus.store(MODTOOLS_CAMERA_LUT_PREVIEW_UNSUPPORTED, std::memory_order_release);
+        else if (next->enabled && next->referenceRgb && next->previewRgb)
+            g_cameraLutStatus.store(MODTOOLS_CAMERA_LUT_PREVIEW_WAITING, std::memory_order_release);
+        else if (next->enabled)
+            g_cameraLutStatus.store(MODTOOLS_CAMERA_LUT_PREVIEW_UNSUPPORTED, std::memory_order_release);
+        else
+            g_cameraLutStatus.store(MODTOOLS_CAMERA_LUT_PREVIEW_OFF, std::memory_order_release);
+    }
+
+    int CameraLutPreviewStatus()
+    {
+        const std::shared_ptr<const CameraLutPreviewData> data = std::atomic_load(&g_cameraLutData);
+        if (data && data->enabled && !g_cameraLutHookReady.load(std::memory_order_acquire))
+            return MODTOOLS_CAMERA_LUT_PREVIEW_UNSUPPORTED;
+        return g_cameraLutStatus.load(std::memory_order_acquire);
+    }
 
     void BeginCamView(const CamParams& p)
     {
@@ -2216,6 +3032,7 @@ namespace render
         {
             std::lock_guard<std::mutex> lock(g_mutex); g_cam = p; g_view = View::Cam; g_pendingView = View::Cam;
         }
+        g_cameraDrawActive.store(true, std::memory_order_release);
         const bool cameraChanged = NativeCameraChanged(p);
         ++g_nativeFrame;
         g_nativeReadbacks = 0;
@@ -2241,7 +3058,7 @@ namespace render
         if (!hadLiveDraw && g_nativeProbeBurstFrames != 0) --g_nativeProbeBurstFrames;
     }
     void BeginXYView(const XYParams& p)   { std::lock_guard<std::mutex> lock(g_mutex); g_xy = p; g_view = View::XY; g_pendingView = View::XY; }
-    void EndView()                        { }
+    void EndView()                        { g_cameraDrawActive.store(false, std::memory_order_release); }
 
     void SetEngineTextAvailable(bool hooked) { g_engineTextHooked = hooked; }
 

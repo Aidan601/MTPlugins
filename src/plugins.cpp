@@ -165,6 +165,15 @@ namespace
     const Renamed kRenamed[] = { { L"BetterRadiant", L"RadiantPlus" }, { L"BetterAPE", L"APEPlus" }, { L"BetterBuild", L"LauncherPlus" },
                                  { L"BuildPlus", L"LauncherPlus" } };
 
+    // Plugin builds made for another host table layout: refused so they cannot call the wrong host functions
+    struct Stale { const char* name; const char* version; };
+    const Stale kStale[] = { { "VisionEditor", "1.0.1" } };
+    bool StaleBuild(const std::string& name, const char* version)
+    {
+        for (const Stale& s : kStale) if (version && IEquals(name, s.name) && strcmp(version, s.version) == 0) return true;
+        return false;
+    }
+
     bool Exists(const std::wstring& p) { return GetFileAttributesW(p.c_str()) != INVALID_FILE_ATTRIBUTES; }
     const Renamed* ReplacedBy(const std::wstring& name)          // non-null when `name` is an old name whose new DLL is here
     {
@@ -513,6 +522,7 @@ namespace plugins
         else if (api->apiVersion != MODTOOLS_PLUGIN_API_VERSION) why = "built for plugin API version " + std::to_string(api->apiVersion) + ", this host has " + std::to_string(MODTOOLS_PLUGIN_API_VERSION);
         else if (api->size < offsetof(ModToolsPluginApi, OnLoad)) why = "plugin table too small";
         else if (!api->name || !IEquals(api->name, p->name)) why = std::string("plugin name '") + (api->name ? api->name : "") + "' does not match the DLL name";
+        else if (StaleBuild(p->name, api->version)) why = std::string("version ") + api->version + " needs an update for this MTPlugins version (Browse plugins)";
         if (!why.empty())
         {
             ReleaseResources(p); FreeLibrary(m); p->module = nullptr;

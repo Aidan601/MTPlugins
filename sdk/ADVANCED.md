@@ -171,6 +171,12 @@ For plugins that apply other people's edits or preview geometry, the host has a 
 - `PatchSetGrid` records no undo: call it between `BeginUndo` and `EndUndo`. It refuses non-finite points, coordinates past 131072, more than 5450 points and collapsed segments.
 - On hosts that have these two, `MoveBrush` on a patch also re-tessellates its render mesh. On older hosts call `Patch_RebuildMesh` after it yourself.
 
+### Camera LUT preview
+
+- `SetCameraLutPreview` replaces the world LUT texture Radiant's camera binds with your own pixels, in memory only. Both buffers are tightly packed RGB `uint16` rows, at most 1024 x 1024, copied during the call.
+- `referenceRgb` is the LUT as it is on disk: the host compares it with the camera's bound textures to find the one to replace. Pass it when the base LUT changes, NULL on later updates of `previewRgb` alone.
+- `CameraLutPreviewStatus`: WAITING until a matching texture is bound, MATCHED once found, ACTIVE while the camera draws with it, NO_MATCH after 60 camera frames without one, UNSUPPORTED for a texture format it cannot write. `enabled = 0` puts the original back.
+
 ### Running on an older host
 
 A host function added after 1.0.0 is missing on a 1.0.0 host (`rp::Has` is false). When the plugin must still work there, keep a fallback built from 1.0.0 functions and `RadiantAddress`:
