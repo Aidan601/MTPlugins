@@ -9,6 +9,7 @@
 //   Main thread       StatusOf, Updates, Install, InstallAll (queue), Tick -> FinishInstall (unload, move into place, rescan, load)
 //   Uninstall         Uninstall, Tick -> FinishUninstall (unload, files deleted or moved to .mtplugins-removed, Forget)
 //   Bundled plugins   LoadBundled (bundled.ini beside the kept Setup), StartSetup (/ADDPLUGIN), Tick -> FinishSetup
+//   Official feed     UpdatesSource, FetchIndex (updates.json, only for installed bundled plugins), OfficialFor
 //   Shared            browse::Fetch, Sha256, StartWorker, ParseVersion, Newer (update.cpp)
 #include <windows.h>
 #include <winhttp.h>
@@ -21,6 +22,7 @@
 #include "plugins.h"
 #include "config.h"
 #include "log.h"
+#include "version.h"
 #include "../plugins/common/json.h"
 
 #pragma comment(lib, "winhttp.lib")
@@ -29,6 +31,7 @@
 namespace
 {
     const wchar_t* kDefaultIndex = L"https://raw.githubusercontent.com/Aidan601/MTPlugins-Index/main/index.json";
+    const wchar_t* kDefaultUpdates = L"https://raw.githubusercontent.com/Aidan601/MTPlugins/main/updates.json";   // tools/publish/release_plugin.py
     const size_t kMaxIndexBytes = 4u << 20;
     const size_t kMaxFileBytes = 256u << 20;
     const wchar_t* kStaging = L".mtplugins-download";      // under the plugins folder (no DLL of that name: never a plugin)
@@ -53,6 +56,8 @@ namespace
     const wchar_t* kSetupExe = L"MTPlugins-Setup.exe";
     const wchar_t* kBundledIni = L"bundled.ini";
     std::vector<browse::Entry> g_bundled; // every plugin the kept Setup holds, installed or not
+    std::vector<browse::Entry> g_official;   // updates.json entries for bundled plugins (official = true)
+    bool g_localUpdates = false;          // the feed came from a file: its file entries may be local paths
     HANDLE g_setupProcess = nullptr;      // the running Setup, main thread only
     browse::Entry g_setupEntry;
 
@@ -82,14 +87,16 @@ namespace
     }
     bool StartsWithI(const std::wstring& s, const wchar_t* p) { return _wcsnicmp(s.c_str(), p, wcslen(p)) == 0; }
 
-    std::wstring IndexSource()
+    std::wstring BrowseKey(const wchar_t* key, const wchar_t* def)
     {
         wchar_t buf[2048] = {};
-        GetPrivateProfileStringW(L"browse", L"index", L"", buf, 2048, Cfg().iniPath.c_str());
+        GetPrivateProfileStringW(L"browse", key, L"", buf, 2048, Cfg().iniPath.c_str());
         std::wstring s = buf;
         while (!s.empty() && iswspace(s.back())) s.pop_back();
-        return s.empty() ? kDefaultIndex : s;
+        return s.empty() ? def : s;
     }
+    std::wstring IndexSource() { return BrowseKey(L"index", kDefaultIndex); }
+    std::wstring UpdatesSource() { return BrowseKey(L"updates", kDefaultUpdates); }
 
     // ---- download ---------------------------------------------------------------------------------------------
     struct Handle { HINTERNET h = nullptr; ~Handle() { if (h) WinHttpCloseHandle(h); } };
@@ -252,6 +259,7 @@ namespace
             e.description = j.str("description");
             e.version = j.str("version");
             e.changes = j.str("changes");
+            e.minHost = j.str("minHost");
             for (auto& c : e.changes) if (c == '\r' || c == '\n' || c == '\t') c = ' ';
             if (e.changes.size() > 200) e.changes = e.changes.substr(0, 197) + "...";
             e.url = j.str("url");
@@ -433,14 +441,41 @@ namespace
         return true;
     }
 
+    // the official feed, same format as the index: entries for plugins Setup does not hold are dropped
+    void FetchUpdates(const std::wstring& src)
+    {
+        std::vector<browse::Entry> bundled;
+        { std::lock_guard<std::mutex> lk(g_mu); bundled = g_bundled; }
+        std::vector<browse::Entry> list, keep;
+        bool local = !StartsWithI(src, L"https://");
+        std::string body, err;
+        if (!bundled.empty() && (!Fetch(Narrow(src), true, kMaxIndexBytes, body, err) || !ParseIndex(body, Narrow(src), local, list, err)))
+            LOG("browse: no official updates: %s", err.c_str());
+        for (browse::Entry& e : list)
+        {
+            bool ours = false;
+            for (const browse::Entry& b : bundled) if (_stricmp(b.name.c_str(), e.name.c_str()) == 0) ours = true;
+            if (!ours) { LOG("browse: skipped %s in the official updates (not a plugin Setup holds)", e.name.c_str()); continue; }
+            e.official = true;
+            keep.push_back(e);
+        }
+        std::lock_guard<std::mutex> lk(g_mu);
+        g_official.swap(keep);
+        g_localUpdates = local;
+    }
+
+    struct Sources { std::wstring index, updates; };
+
     void FetchIndex(void* arg)
     {
-        std::wstring* src = static_cast<std::wstring*>(arg);
+        Sources* srcs = static_cast<Sources*>(arg);
+        std::wstring* src = &srcs->index;
         bool local = !StartsWithI(*src, L"https://");
         std::string body, err;
         std::vector<browse::Entry> list;
         bool ok = Fetch(Narrow(*src), true, kMaxIndexBytes, body, err) && ParseIndex(body, Narrow(*src), local, list, err);
-        delete src;
+        FetchUpdates(srcs->updates);
+        delete srcs;
         if (ok)
         {
             { std::lock_guard<std::mutex> lk(g_mu); g_entries = list; g_loaded = true; g_localIndex = local; }
@@ -664,15 +699,22 @@ namespace browse
         DeleteOldFiles(plugins::Root());
         RemoveTree(plugins::Root() + L"\\" + kRemoved);
         LoadBundled();
-        if (!::StartWorker(FetchIndex, new std::wstring(IndexSource()))) { g_loading = false; SetMessage("Could not start the download thread"); }
+        Sources* srcs = new Sources{ IndexSource(), UpdatesSource() };
+        if (!::StartWorker(FetchIndex, srcs)) { delete srcs; g_loading = false; SetMessage("Could not start the download thread"); }
     }
     bool Loading() { return g_loading; }
     bool Loaded() { std::lock_guard<std::mutex> lk(g_mu); return g_loaded; }
     std::vector<Entry> Entries()
     {
+        std::vector<Entry> out, official;
+        {
+            std::lock_guard<std::mutex> lk(g_mu);
+            for (const Entry& b : g_bundled) if (!Exists(PluginDll(b.name))) out.push_back(b);
+            for (const Entry& o : g_official) if (Exists(PluginDll(o.name))) official.push_back(o);
+        }
+        // an official entry shows only while it is an update: the Installed view already lists our plugins
+        for (const Entry& o : official) if (StatusOf(o) == Status::UpdateAvailable) out.push_back(o);
         std::lock_guard<std::mutex> lk(g_mu);
-        std::vector<Entry> out;
-        for (const Entry& b : g_bundled) if (!Exists(PluginDll(b.name))) out.push_back(b);
         // a list entry named like a plugin Setup holds is left out: Setup's copy is the one made for this MTPlugins
         for (const Entry& e : g_entries)
         {
@@ -690,6 +732,11 @@ namespace browse
     {
         if (e.bundled) return Exists(PluginDll(e.name)) ? Status::Installed : Status::NotInstalled;   // never an update: Setup brings those
         if (e.apiVersion != MODTOOLS_PLUGIN_API_VERSION) return Status::Incompatible;
+        if (!e.minHost.empty())
+        {
+            std::vector<int> need = ParseVersion(e.minHost);
+            if (need.empty() || Newer(need, ParseVersion(MTPLUGINS_VERSION))) return Status::Incompatible;
+        }
         std::wstring dir = plugins::Root() + L"\\" + Widen(e.name);
         if (GetFileAttributesW((dir + L"\\" + Widen(e.name) + L".dll").c_str()) == INVALID_FILE_ATTRIBUTES) return Status::NotInstalled;
         bool same = true;
@@ -707,6 +754,15 @@ namespace browse
         std::vector<Entry> out;
         for (const Entry& e : Entries()) if (StatusOf(e) == Status::UpdateAvailable) out.push_back(e);
         return out;
+    }
+
+    std::string ChangesOf(const std::string& name, const std::string& version)
+    {
+        std::lock_guard<std::mutex> lk(g_mu);
+        for (const std::vector<Entry>* list : { &g_official, &g_entries })
+            for (const Entry& e : *list)
+                if (_stricmp(e.name.c_str(), name.c_str()) == 0 && e.version == version) return e.changes;
+        return "";
     }
 
     const char* StatusName(Status s)
@@ -732,6 +788,9 @@ namespace browse
             for (const Entry& x : g_entries) if (_stricmp(x.name.c_str(), name.c_str()) == 0) { e = x; found = true; }
             for (const Entry& x : g_bundled) if (_stricmp(x.name.c_str(), name.c_str()) == 0) { e = x; found = true; }
             local = g_localIndex;
+            // an installed plugin of ours updates from the official feed, a missing one still comes from Setup
+            if (found && e.bundled && Exists(PluginDll(e.name)))
+                for (const Entry& x : g_official) if (_stricmp(x.name.c_str(), name.c_str()) == 0) { e = x; local = g_localUpdates; }
         }
         if (!found) { SetMessage("That plugin is not in the list any more"); return false; }
         if (e.bundled)

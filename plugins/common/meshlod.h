@@ -2,6 +2,7 @@
 // Only what the reducer reads back is produced: the face vector shrunk in place, corner positions, an attribute block per face.
 #pragma once
 #include <windows.h>
+#include <algorithm>
 #include <cfloat>
 #include <cmath>
 #include <cstdint>
@@ -18,8 +19,8 @@ namespace meshlod
     // +32 float* attributes, three corners of `stride` floats. Corner record (16 bytes): x, y, z, u32 weight hash.
     // Corner attributes: normal 0..2, color 3..6, uv 7..8, uv again 9..10, then one weight per bone.
     constexpr size_t kFace = 40, kCorner = 16, kNormal = 0, kColor = 3, kUv = 7, kUv2 = 9;
-    // cache tag of these LODs ("mop2"): bump it and the linker's "_mo2" name suffix whenever the output changes
-    constexpr uint32_t kCacheTag = 0x6D6F7032;
+    // cache tag of these LODs ("mop3"): bump it and the linker's "_mo3" name suffix whenever the output changes
+    constexpr uint32_t kCacheTag = 0x6D6F7033;
 
     using SimplifyFn = double (*)(void*, Vec*, Vec*, double, unsigned, float, Vec*);
     inline SimplifyFn g_simplify = nullptr;
@@ -33,6 +34,34 @@ namespace meshlod
         const unsigned char* b = static_cast<const unsigned char*>(p);
         for (size_t i = 0; i < n; ++i) h = (h ^ b[i]) * 0x100000001B3ull;
         return h;
+    }
+
+    // false for zero, NaN and infinite vectors, which the reducer fails with "Produced invalid normal"
+    inline bool Usable(const float* n)
+    {
+        const float l = n[0] * n[0] + n[1] * n[1] + n[2] * n[2];
+        return l > 1e-12f && l < FLT_MAX;
+    }
+
+    // corners still without a usable normal (a broken source normal) get the face normal, turned to agree with the others
+    inline void RepairFace(float* block, int stride, const std::vector<float>& pos, const uint32_t* tri)
+    {
+        float* n[3] = { block + kNormal, block + stride + kNormal, block + 2 * size_t(stride) + kNormal };
+        if (Usable(n[0]) && Usable(n[1]) && Usable(n[2])) return;
+        const float* p[3] = { &pos[3 * size_t(tri[0])], &pos[3 * size_t(tri[1])], &pos[3 * size_t(tri[2])] };
+        const float e[3] = { p[1][0] - p[0][0], p[1][1] - p[0][1], p[1][2] - p[0][2] }, f[3] = { p[2][0] - p[0][0], p[2][1] - p[0][1], p[2][2] - p[0][2] };
+        float g[3] = { e[1] * f[2] - e[2] * f[1], e[2] * f[0] - e[0] * f[2], e[0] * f[1] - e[1] * f[0] };
+        float dot = 0;
+        for (int k = 0; k < 3; ++k)
+            if (Usable(n[k])) dot += g[0] * n[k][0] + g[1] * n[k][1] + g[2] * n[k][2];
+        if (!Usable(g)) { g[0] = 0; g[1] = 0; g[2] = 1; }   // zero-area face
+        else
+        {
+            const float len = sqrtf(g[0] * g[0] + g[1] * g[1] + g[2] * g[2]) * (dot < 0 ? -1.0f : 1.0f);
+            g[0] /= len; g[1] /= len; g[2] /= len;
+        }
+        for (int k = 0; k < 3; ++k)
+            if (!Usable(n[k])) memcpy(n[k], g, 12);
     }
 
     inline double HookSimplify(void* params, Vec* faces, Vec* corners, double a4, unsigned target, float a6, Vec* out)
@@ -90,9 +119,24 @@ namespace meshlod
         // permissive: collapses may cross attribute splits (hard edges, uv seams) like stock's, which welds by position only.
         // low attribute weights keep shape first: higher ones let hard edges steer collapses into visible gaps
     static const float kWeights[9] = { 0.25f, 0.25f, 0.25f, 0.5f, 0.5f, 0.25f, 0.25f, 0.25f, 0.25f };   // normal, uv, color as in `attr`
+        float lo[3] = { FLT_MAX, FLT_MAX, FLT_MAX }, hi[3] = { -FLT_MAX, -FLT_MAX, -FLT_MAX };
+        for (size_t i = 0; i < pos.size(); ++i) { lo[i % 3] = (std::min)(lo[i % 3], pos[i]); hi[i % 3] = (std::max)(hi[i % 3], pos[i]); }
+        const std::vector<float> before = pos;
         const size_t count = meshopt_simplifyWithUpdate(index.data(), index.size(), pos.data(), welded.size(), 12, attr.data(), 36, kWeights, 9, nullptr,
                                                         size_t(target) * 3, FLT_MAX, meshopt_SimplifyPermissive, nullptr);
         const size_t out_faces = count / 3;
+
+        // a moved vertex may leave the input bounds on large flat parts: the reducer fails those with "Produced out of bounds vertex"
+        std::vector<unsigned char> kept(welded.size(), 0);
+        for (size_t v = 0; v < welded.size(); ++v)
+        {
+            const float* q = &pos[3 * v];
+            if (!(q[0] >= lo[0] && q[0] <= hi[0] && q[1] >= lo[1] && q[1] <= hi[1] && q[2] >= lo[2] && q[2] <= hi[2]))   // NaN fails too
+            {
+                memcpy(&pos[3 * v], &before[3 * v], 12);
+                kept[v] = 1;
+            }
+        }
 
         // write back: moved positions into each welded vertex's own corner record, faces in place
         std::vector<float>& store = t_attributes;
@@ -113,10 +157,14 @@ namespace meshlod
                 float* a = block + size_t(stride) * k;
                 memcpy(a, &full[size_t(stride) * v], attrBytes);
                 const float* s = &attr[9 * size_t(v)];
+                if (kept[v]) continue;   // original position keeps its original attributes
                 a[kNormal] = s[0]; a[kNormal + 1] = s[1]; a[kNormal + 2] = s[2];
                 a[kUv] = a[kUv2] = s[3]; a[kUv + 1] = a[kUv2 + 1] = s[4];
                 a[kColor] = s[5]; a[kColor + 1] = s[6]; a[kColor + 2] = s[7]; a[kColor + 3] = s[8];
+                // interpolated normals are not normalized: opposite ones merged across a hard edge can cancel to zero
+                if (!Usable(a + kNormal)) memcpy(a + kNormal, &full[size_t(stride) * v + kNormal], 12);
             }
+            RepairFace(block, stride, pos, tri);
             *reinterpret_cast<float**>(rec + 32) = block;
         }
         faces->end = faces->begin + kFace * out_faces;

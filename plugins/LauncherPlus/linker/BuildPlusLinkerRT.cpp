@@ -841,7 +841,7 @@ namespace
     // reduced LODs from meshoptimizer get their own cache entries: switching never reuses the other simplifier's
     const char* MeshCacheName(const char* fmt, int faces, double scale, const char* kind, const char* rigid, const char* origuv)
     {
-        return g_va(faces && !KeepStock(unsigned(faces)) ? "_f%d_s%f_%s%s%s_mo2" : fmt, faces, scale, kind, rigid, origuv);
+        return g_va(faces && !KeepStock(unsigned(faces)) ? "_f%d_s%f_%s%s%s_mo3" : fmt, faces, scale, kind, rigid, origuv);
     }
 
     bool WriteCode(unsigned char* at, const unsigned char* bytes, size_t n);

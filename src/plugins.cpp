@@ -827,7 +827,7 @@ namespace plugins
                 if (arg == "refresh" || (!browse::Loaded() && !browse::Loading() && browse::Message().empty())) browse::Refresh();
                 if (browse::Loading()) return "loading: " + browse::Message();
                 std::string out;
-                for (const browse::Entry& e : browse::Entries()) out += e.name + " " + e.version + " " + browse::StatusName(browse::StatusOf(e)) + (e.bundled ? " (comes with MTPlugins)" : "") + "\n";
+                for (const browse::Entry& e : browse::Entries()) out += e.name + " " + e.version + " " + browse::StatusName(browse::StatusOf(e)) + (e.bundled || e.official ? " (comes with MTPlugins)" : "") + "\n";
                 return out + browse::Message() + (browse::Installing() ? " (install running)" : "");
             }
             // plugins install|uninstall <Name>: local automation, the window asks first

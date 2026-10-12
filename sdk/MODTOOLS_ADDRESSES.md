@@ -8,7 +8,7 @@ Names come from Treyarch's log texts and id's Q3Radiant where known, else from w
 Every function address below is a real function start (listed in the exe's exception table). This file is
 generated from the addresses the host and the shipped plugins use: do not edit it by hand.
 
-## Radiant functions (236)
+## Radiant functions (240)
 
 | Address | Name | Prototype (x64) | Notes |
 | ------- | ---- | --------------- | ----- |
@@ -70,6 +70,7 @@ generated from the addresses the host and the shipped plugins use: do not edit i
 | `0x1402F38B0` | `CCamWnd::UpdateGI` |  | CCamWnd::UpdateGI(CCamWnd*, char tickMode), the export loop calls it with 0 |
 | `0x1402F69E0` | `BakeStart` | `void(CCamWnd*, char incremental, char sun, uchar probes, char)` | every build starts here |
 | `0x140302410` | `SmoothTask` |  | state 5 "Probe Smooth Postprocess" std::async callable: char(capture*), 0 = skipped |
+| `0x14035A9B0` | `LightStateUpdate` | `(const float* camPos, ...)` | sun volumes at camPos, a changed one starts a timed light state blend |
 | `0x1403A91A0` | `DebugLists` | `(a, b, c)` | Cam_Draw's two persistent primitive lists (0x14448FC80, 0x14448FCD0) |
 | `0x140420920` | `TreeModelClear` |  | asset tree source model: removeRows(0, rowCount) |
 | `0x14042C300` | `TreeSetSelected` |  | asset tree proxy: store the selected set, then invalidateFilter |
@@ -84,6 +85,8 @@ generated from the addresses the host and the shipped plugins use: do not edit i
 | `0x1405B28C0` | `FxRelease` | `(unsigned effect)` | drops the spawner's reference and the effect's own, the slot is freed |
 | `0x1405B29C0` | `FxKill` | `(unsigned effect)` | kills the effect and its children, the references stay |
 | `0x1405B2BD0` | `FxSpawn` | `(int def, const float origin[3], const float axis[9], int delayMs, float unused)` | effect handle, 0 = failed |
+| `0x1405B3060` | `FxDrawBegin` |  | enters the fx critical section 0x1444B1480 and empties the icon map 0x1444A73E8 |
+| `0x1405B3120` | `FxDrawEnd` |  | empties the fx light vectors 0x1444A73A0/B8/D0 and leaves the section |
 | `0x1405B5740` | `FxLoadLights` | `(const char* name, holder)` | the dynamicLight blocks of the text into the holder |
 | `0x1405B5830` | `FxFixSegments` | `(holder)` | segment light names after a load |
 | `0x140620F90` | `RadMetaObject` |  | QRadFileDialog::metaObject |
@@ -96,6 +99,7 @@ generated from the addresses the host and the shipped plugins use: do not edit i
 | `0x1406527C0` | `PrefsSlot` |  | Settings > Preferences... slot (ctor, load, exec, OK tail) |
 | `0x14065C450` | `FilesModifiedCheck` | `FilesModifiedCheck(this)` | "Files Modified" Yes/No box, Yes reloads the map. Only runs when Perforce is enabled |
 | `0x1406F6A80` | `BeginParseSession` | `(const char* name)` / `` | around an import |
+| `0x14077F1E0` | `OutdoorUpdate` | `(scene, int, char)` | outdoor map for the camera's volumes, rebuilt whole when they change, reset when none |
 | `0x14078E1D0` | `Patch_Resize` | `void (patch, int rows, int cols)` | the control array may move (read its pointer again), remaps the vertex selection by index |
 | `0x1407956A0` | `Patch_InsertDelete` | `(insert, column, first)` | over the selected brushes (menu wrappers 0x140655DB0..EA0) |
 | `0x14079C450` | `Patch_ConnectVerts` |  | void Patch_ConnectVerts(char): the W handler's body in Drag Vertices mode (0x140650860 checks the drag mode first). Flag 0, candidates > 0: every selected vertex copies candidate[0], undo "connect vertices", both counts cleared |
@@ -249,7 +253,7 @@ generated from the addresses the host and the shipped plugins use: do not edit i
 | `0x1412CC720` | `CacheWrite` |  | "ToolsGfx/xmeshes/v39/<mesh>/pct%d_<key>" |
 | `0x1412F15D0` | `Lookup` | `int (table*, Qt::MouseButton, Qt::KeyboardModifiers)` | action id, 0 = none |
 
-## Radiant globals (97)
+## Radiant globals (98)
 
 | Address | Name | Notes |
 | ------- | ---- | ----- |
@@ -277,6 +281,7 @@ generated from the addresses the host and the shipped plugins use: do not edit i
 | `0x1444877E0` | `g_BrushCacheRootEntries` |  |
 | `0x144487804` | `SpatialBrushDirtyFlag` |  |
 | `0x144487830` | `g_BrushCacheCategories` | six { begin, end, capacity } vectors of 16-byte { record*, mask } |
+| `0x1444A73E8` | `FxIconMap` | std::map<def, shared_ptr<Light>> head pointer, size at +8: last frame's fx lights |
 | `0x1444C6560` | `main window` | RadiantMainWin* RadiantMainWin* (mainwin+64 -> QE children, children+240 -> CCamWnd*) |
 | `0x1444C656C` | `redraw flags` | int OR in bits to mark views dirty for the next tick |
 | `0x1444C6578` | `FrameBudget` | double, Radiant's limiter: frames it may still ask for |

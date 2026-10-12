@@ -13,6 +13,7 @@ namespace browse
     {
         std::string name, displayName, author, description, url, version;
         std::string changes;           // optional one line: what changed in this version (shown in the update question)
+        std::string minHost;           // optional MTPlugins version this build needs, older hosts see Incompatible
         uint32_t apps = 0;             // MODTOOLS_APP_* mask
         uint32_t apiVersion = 0;
         std::vector<File> files;
@@ -21,6 +22,9 @@ namespace browse
         bool bundled = false;
         std::string component;         // Setup's component name
         std::string note;              // optional line for the install question (what else Setup does for this plugin)
+        // An update to an installed plugin of ours from the official feed (updates.json in the MTPlugins repo), installed
+        // like an index entry. Listed only while it is newer than the installed copy.
+        bool official = false;
     };
     // UpdateAvailable: files differ and the list's version is newer than the installed DLL's (or that is unknown).
     // Modified: files differ but the installed version is the same or newer (local build or edit), never offered as an update.
@@ -29,11 +33,12 @@ namespace browse
     void Refresh();                    // (re)load the index in the background
     bool Loading();
     bool Loaded();                     // an index is in hand (possibly empty)
-    std::vector<Entry> Entries();      // the bundled plugins that are not installed, then the index
+    std::vector<Entry> Entries();      // main thread: the bundled plugins that are not installed, official updates, then the index
     Status StatusOf(const Entry& e);   // main thread, compares installed files with the index hashes
     const char* StatusName(Status s);
 
     std::vector<Entry> Updates();      // main thread: the installed, compatible entries whose status is UpdateAvailable
+    std::string ChangesOf(const std::string& name, const std::string& version);   // the `changes` line the index or the feed has for it
 
     bool Install(const std::string& name);   // start download + verify, false (with Message) when refused or busy
     bool Installing();

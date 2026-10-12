@@ -3,7 +3,7 @@
 ; Settings files (*.ini) are installed only when missing, so an update keeps the user's settings.
 
 #ifndef AppVersion
-  #define AppVersion "1.1.0"
+  #define AppVersion "1.1.1"
 #endif
 #define Bin "..\build\Release"
 #if FileExists(AddBackslash(SourcePath) + "..\LICENSE")

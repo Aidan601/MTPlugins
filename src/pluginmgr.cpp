@@ -83,6 +83,11 @@ namespace
     }
     std::string Link(const std::string& url) { return Linkify(Escape(url)); }
 
+    // the list is shown A-Z by the name the user sees, load order is left alone
+    bool NameLess(const std::string& a, const std::string& b) { return _stricmp(a.c_str(), b.c_str()) < 0; }
+    const std::string& Shown(const ModToolsPlugin* p) { return p->displayName.empty() ? p->name : p->displayName; }
+    const std::string& Shown(const browse::Entry& e) { return e.displayName.empty() ? e.name : e.displayName; }
+
     std::string Narrow(const std::wstring& w)
     {
         int n = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, nullptr, 0, nullptr, nullptr);
@@ -214,12 +219,18 @@ namespace
         qt::ListClear(g_list);
         g_browseNames.clear();
         int row = 0, keepRow = -1;
-        for (const browse::Entry& e : browse::Entries())
+        std::vector<browse::Entry> entries = browse::Entries();
+        // MTPlugins' own entries stay ahead of the community list
+        std::stable_sort(entries.begin(), entries.end(), [](const browse::Entry& a, const browse::Entry& b) {
+            bool ao = a.bundled || a.official, bo = b.bundled || b.official;
+            return ao != bo ? ao : NameLess(Shown(a), Shown(b));
+        });
+        for (const browse::Entry& e : entries)
         {
             if (!g_showAll && !(e.apps & uint32_t(app::ApiId()))) continue;
             if (!Matches({ e.name, e.displayName, e.author, e.description, plugins::AppNames(e.apps), browse::StatusName(browse::StatusOf(e)) })) continue;
             std::string label = e.displayName + (e.version.empty() ? "" : "  " + e.version) + (e.author.empty() ? "" : "  by " + e.author) +
-                                "    [" + plugins::AppNames(e.apps) + "]    " + browse::StatusName(browse::StatusOf(e)) + (e.bundled ? " (comes with MTPlugins)" : "");
+                                "    [" + plugins::AppNames(e.apps) + "]    " + browse::StatusName(browse::StatusOf(e)) + (e.bundled || e.official ? " (comes with MTPlugins)" : "");
             qt::ListAdd(g_list, label.c_str());
             if (!e.description.empty()) qt::ListSetItemToolTip(g_list, row, e.description.c_str());
             g_browseNames.push_back(e.name);
@@ -253,12 +264,14 @@ namespace
         g_rowNames.clear(); g_rowChecked.clear();
         int row = 0;
         int keepRow = -1;
-        for (ModToolsPlugin* p : plugins::All())
+        std::vector<ModToolsPlugin*> all = plugins::All();
+        std::stable_sort(all.begin(), all.end(), [](const ModToolsPlugin* a, const ModToolsPlugin* b) { return NameLess(Shown(a), Shown(b)); });
+        for (ModToolsPlugin* p : all)
         {
             // keep unknown/failed probes visible, hide known foreign apps
             if (!g_showAll && !plugins::ForThisEditor(p)) continue;
             if (!Matches({ p->name, p->displayName, p->author, p->description, plugins::AppNames(p->apps), plugins::StateName(p->state) })) continue;
-            std::string label = (p->displayName.empty() ? p->name : p->displayName) + (p->version.empty() ? "" : "  " + p->version) + "    [" + plugins::AppNames(p->apps) + "]";
+            std::string label = Shown(p) + (p->version.empty() ? "" : "  " + p->version) + "    [" + plugins::AppNames(p->apps) + "]";
             // the checkbox already says Loaded/Disabled
             if (p->state != ModToolsPlugin::Loaded && p->state != ModToolsPlugin::Disabled) label += std::string("    ") + plugins::StateName(p->state);
             qt::ListAdd(g_list, label.c_str());
@@ -319,6 +332,9 @@ namespace
         std::string q = "Install " + e.displayName + (e.version.empty() ? "" : " " + e.version) + (e.author.empty() ? "" : " by " + e.author) + "?\n\n"
                         "Downloaded from: " + from + " (" + std::to_string(e.files.size()) + " file(s), each checked against the plugin list's SHA-256)\n\n"
                         "Plugins run inside the editor with full access to your PC. Only install plugins from authors you trust.";
+        if (e.official)
+            q = "Update " + e.displayName + " to " + e.version + "?\n\nIt comes with MTPlugins. Downloaded from: " + from + " (" + std::to_string(e.files.size()) +
+                " file(s), each checked against its SHA-256). Your settings are kept.";
         // one of ours that Setup left out: the kept Setup adds it (browse::StartSetup)
         if (e.bundled)
             q = "Install " + e.displayName + "?\n\nIt comes with MTPlugins. MTPlugins Setup adds it: Windows may ask for permission, and the editors can stay open." +
@@ -327,7 +343,7 @@ namespace
         std::wstring wq(wlen ? wlen - 1 : 0, L'\0');
         if (wlen) MultiByteToWideChar(CP_UTF8, 0, q.c_str(), -1, &wq[0], wlen);
         HWND owner = reinterpret_cast<HWND>(qt::WinId(g_dialog));
-        if (MessageBoxW(owner, wq.c_str(), L"Install plugin", e.bundled ? MB_OKCANCEL | MB_ICONQUESTION : MB_OKCANCEL | MB_ICONWARNING | MB_DEFBUTTON2) != IDOK) return;
+        if (MessageBoxW(owner, wq.c_str(), e.official ? L"Update plugin" : L"Install plugin", e.bundled || e.official ? MB_OKCANCEL | MB_ICONQUESTION : MB_OKCANCEL | MB_ICONWARNING | MB_DEFBUTTON2) != IDOK) return;
         browse::Install(e.name);
         Rebuild();
     }

@@ -57,6 +57,12 @@ namespace
     const uintptr_t kDebugLists      = 0x1403A91A0;  // (a, b, c): Cam_Draw's two persistent primitive lists (0x14448FC80, 0x14448FCD0)
     const uintptr_t kCachedLines     = 0x140B59CC0;  // (cam + 0xEF8): Cam_Draw's pre-built line sets, editor view only
     const uintptr_t kRenderOption    = 0x1409BBAC0;  // (int bit) -> bool, bit 1 = Fx > Fx Rendering Enabled
+    const uintptr_t kSetRenderOption = 0x1409BC2B0;  // (int bit, char on): facts
+    const uintptr_t kOutdoorUpdate   = 0x14077F1E0;  // (scene, int, char): outdoor map for the camera's volumes, rebuilt whole when they change, reset when none
+    const uintptr_t kFxDrawBegin     = 0x1405B3060;  // (): enters the fx critical section 0x1444B1480 and empties the icon map 0x1444A73E8
+    const uintptr_t kFxDrawEnd       = 0x1405B3120;  // (): empties the fx light vectors 0x1444A73A0/B8/D0 and leaves the section
+    const uintptr_t kFxIconMap       = 0x1444A73E8;  // std::map<def, shared_ptr<Light>> head pointer, size at +8: last frame's fx lights
+    const uintptr_t kLightStateUpdate = 0x14035A9B0;  // (const float* camPos, ...): sun volumes at camPos, a changed one starts a timed light state blend
     const uintptr_t kColorTable      = 0x1453A14A8;  // float[48][4], row 4 = COLOR_CAMERABACK (Cam_Draw clears with it)
     const uintptr_t kMainWin         = 0x1444C6560;  // RadiantMainWin*, +64 = RadiantQtBridge, bridge+240 = CCamWnd, bridge+1888 = EffectPlaybackMgr
     const uintptr_t kPlaybackMgrVtbl = 0x142310788;  // EffectPlaybackMgr's vtable, checked before the manager is trusted
@@ -226,6 +232,10 @@ namespace
         void* (*imageScaled)(const void* img, void* out, int w, int h, int aspect, int mode);
         bool  (*imageSave)(const void* img, const void* qstring, const char* format, int quality);
         void* (*imageFromFile)(void* img, const void* qstring, const char* format);
+        unsigned char* (*imageBits)(void* img);            // optional: QImage::bits (detaches)
+        int (*imageBytesPerLine)(const void* img);         // optional
+        void* (*iconCtor)(void* icon);                     // optional: a null QIcon clears a row's tile
+        void  (*scrollToItem)(void* list, const void* item, int hint);   // optional: "dbg scroll <row>" (tests)
         int   (*imageWidth)(const void* img);
         int   (*imageHeight)(const void* img);
         void* (*stringCtor)(void* qs, const char* text);
@@ -291,7 +301,7 @@ namespace
     struct Entry { std::string dir, name; };   // "fire", "fx_embers_burst": the effect is "fire/fx_embers_burst"
     std::vector<Entry> g_all;           // every .efx under share/raw/fx
     std::vector<int> g_rows;            // the grid: indices into g_all
-    std::vector<char> g_rowState;       // per grid row: 0 not looked at, 1 icon set, 2 thumbnail queued or failed
+    std::vector<char> g_rowState;       // per grid row: 0 not looked at, 1 icon set, 2 thumbnail queued or failed, 3 on the cutter
     std::vector<int> g_queue;           // thumbnails to make, indices into g_all (the rows on screen go first)
     std::vector<int> g_failed;          // effects whose thumbnail failed, not tried again this session
     size_t g_queueDone = 0, g_queueTotal = 0;
@@ -326,11 +336,146 @@ namespace
     const char* FxSystem();
     // a step on the box's or the jobs' clock updates only our effects (child effects included): no light icons from it
     bool OurStep() { const char* s = FxSystem(); return s && Timeline(*reinterpret_cast<const int*>(s + 2292)) != 0; }
+    bool OurEffect(const char* effect);
+    bool g_thumbFrame = false;          // a hidden frame is being drawn: the map stays out
+    DWORD g_thumbThread = 0;            // the thread drawing it (main)
+    uint64_t NowUs();
+    uint64_t g_iconUs = 0, g_iconMaxUs = 0;     // time spent in Radiant's light build, for "fxpreview dbg"
+    unsigned g_iconPlanesZero = 0, g_iconRestored = 0, g_iconBuilt = 0;
+    int g_cullPlanes = 0;               // the step camera's plane count before hk_SetCamera zeroed it
+    // The fx camera (origin, planes, axes, count: 152 bytes) as Radiant's own step last set it. Our stage steps set it to the
+    // stage between the user's frames, so a map light's frustum test in the user's frame would use the stage's planes and
+    // build every light the stage sees.
+    alignas(16) char g_userCam[152];
+    bool g_userCamValid = false;
+    unsigned g_userCamInstalls = 0, g_userCamSets = 0, g_userCamRestores = 0;
+    float g_lightRange = 0.0f;          // [fx] light_range: a map effect's light farther than this from the camera is not built (0 = all)
+    unsigned g_iconFar = 0;
+    // The fx camera stays where the last step put it. Radiant's own step sets it only now and then, so after a stage step
+    // it would hold the stage's planes (a view of the whole map from above) and every map light in the next user frames
+    // would pass its frustum test and be rebuilt (2 ms each, 110 a frame on zm_giant). The copy at +368 is what the draw
+    // reads.
+    typedef __int64 (*FxMarkFn)();
+    FxMarkFn g_origFxBegin = nullptr, g_origFxEnd = nullptr;
+    unsigned g_fxBegins = 0, g_fxEnds = 0, g_fxBeginsHidden = 0;
+    __int64 hk_FxBegin() { ++g_fxBegins; if (g_thumbFrame) ++g_fxBeginsHidden; return g_origFxBegin(); }
+    __int64 hk_FxEnd() { ++g_fxEnds; return g_origFxEnd(); }
+    // Cam_Draw erases the icon map inline near its start (0x1402454C4), releasing last frame's fx lights; in the user's
+    // frames the fx shadow walk just before it (0x14024514A, render option 52) holds them, so they stay pooled and the
+    // step reuses them. A hidden frame runs the erase without that walk: the lights die and the user's next frame rebuilds
+    // every one (0.6 to 13 ms each). Hidden frames give Cam_Draw an empty map instead.
+    bool g_keepIconMap = true;         // "fxpreview dbg keepmap 0" = hidden frames let Cam_Draw erase it
+    unsigned g_iconMapSwaps = 0;
+    alignas(16) char g_emptyMapHead[64];
+    struct IconMapScope
+    {
+        uintptr_t* head = nullptr; uintptr_t* size = nullptr; uintptr_t savedHead = 0, savedSize = 0;
+        IconMapScope()
+        {
+            if (!g_keepIconMap) return;
+            head = At<uintptr_t*>(kFxIconMap); size = At<uintptr_t*>(kFxIconMap + 8);
+            if (!head || !size) { head = nullptr; return; }
+            uintptr_t* n = reinterpret_cast<uintptr_t*>(g_emptyMapHead);
+            n[0] = n[1] = n[2] = reinterpret_cast<uintptr_t>(n);     // left, parent, right: itself
+            g_emptyMapHead[24] = 1; g_emptyMapHead[25] = 1;         // black, nil
+            savedHead = *head; savedSize = *size;
+            *head = reinterpret_cast<uintptr_t>(n); *size = 0;
+            ++g_iconMapSwaps;
+        }
+        ~IconMapScope() { if (head) { *head = savedHead; *size = savedSize; } }
+    };
+    void RestoreUserCam()
+    {
+        char* sys = const_cast<char*>(FxSystem());
+        if (!sys || !g_userCamValid) return;
+        memcpy(sys, g_userCam, sizeof g_userCam);
+        memcpy(sys + 368, g_userCam, sizeof g_userCam);
+        ++g_userCamRestores;
+    }
+    struct BuildNote { float camZ, fxZ; int planes; unsigned us; bool ours, hidden; };
+    struct CallNote { int lod; __int64 r; unsigned us; unsigned flags4; float fxZ; };
+    CallNote g_callRing[16] = {}; unsigned g_callRingAt = 0;        // every light hook call, for the bisect
+    BuildNote g_buildRing[12] = {}; unsigned g_buildRingAt = 0;      // the last expensive light builds, for "fxpreview dbg"
+    bool g_lightCull = true;            // "fxpreview dbg maplights 1" builds every map fx light again while the cull is off
+    std::string BuildRingText()
+    {
+        std::string out = " [builds camZ/fxZ/planes/us: ";
+        for (unsigned i = 0; i < 12; ++i)
+        {
+            const BuildNote& b = g_buildRing[(g_buildRingAt + i) % 12];
+            char buf[64]; snprintf(buf, sizeof buf, "%.0f/%.0f/%d/%u%s%s ", b.camZ, b.fxZ, b.planes, b.us, b.ours ? "o" : "", b.hidden ? "h" : "");
+            out += buf;
+        }
+        out += "] [calls lod/r/us/flags/fxZ: ";
+        for (unsigned i = 0; i < 16; ++i)
+        {
+            const CallNote& b = g_callRing[(g_callRingAt + i) % 16];
+            char buf[80]; snprintf(buf, sizeof buf, "%d/%lld/%u/%x/%.0f ", b.lod, (long long)b.r, b.us, b.flags4, b.fxZ);
+            out += buf;
+        }
+        return out + "]";
+    }
     __int64 hk_LightIcon(char* ctx, void* elem, void* a3, int lod)
     {
         ++g_iconCalls;
         if (OurStep() || (ctx && StageElem(*reinterpret_cast<const char* const*>(ctx + 72)))) { ++g_iconSkips; return 0; }
-        return g_origLightIcon(ctx, elem, a3, lod);
+        // a hidden frame or a stage step builds no light at all: a light built there takes the pooled slot a map light would
+        // reuse next frame, and the user's frames then rebuild every map light in view (2 ms each, 110 a frame on zm_giant)
+        if (g_thumbFrame || g_inStage > 0) { ++g_iconSkips; return 0; }
+        if (g_lightRange > 0.0f && ctx)     // a far fx light costs the same 2 ms rebuild a frame as a near one and shows as a dot
+        {
+            const char* effect = *reinterpret_cast<const char* const*>(ctx + 56);
+            const char* cam = ctx ? *reinterpret_cast<const char*>(ctx + 88) ? *reinterpret_cast<char* const*>(ctx + 88) : nullptr : nullptr;
+            if (effect && cam && !OurEffect(effect))
+            {
+                const float* o = reinterpret_cast<const float*>(effect + 92);
+                const float* c = reinterpret_cast<const float*>(cam);
+                const float dx = o[0] - c[0], dy = o[1] - c[1], dz = o[2] - c[2];
+                if (dx * dx + dy * dy + dz * dz > g_lightRange * g_lightRange) { ++g_iconFar; return 0; }
+            }
+        }
+        // ctx+56 = the effect, ctx+88 = the fx camera: a map effect's light keeps its frustum test (else every fx light of the map is built)
+        char* cam = ctx ? *reinterpret_cast<char**>(ctx + 88) : nullptr;
+        int* planes = cam ? reinterpret_cast<int*>(cam + off_Sys_PlaneCount) : nullptr;
+        if (planes && *planes == 0) ++g_iconPlanesZero;
+        const uint64_t t0 = NowUs();
+        __int64 r;
+        if (g_lightCull && planes && *planes == 0 && !OurEffect(*reinterpret_cast<const char* const*>(ctx + 56)))
+        {
+            ++g_iconRestored;
+            if (g_userCamValid)             // the user's camera for the rest of this step: the next camera set replaces it
+            {
+                ++g_userCamInstalls;
+                memcpy(cam, g_userCam, sizeof g_userCam);
+                r = g_origLightIcon(ctx, elem, a3, lod);
+            }
+            else if (g_cullPlanes > 0)
+            {
+                *planes = g_cullPlanes;
+                r = g_origLightIcon(ctx, elem, a3, lod);
+                *planes = 0;
+            }
+            else r = g_origLightIcon(ctx, elem, a3, lod);
+        }
+        else r = g_origLightIcon(ctx, elem, a3, lod);
+        const uint64_t us = NowUs() - t0;
+        g_iconUs += us;
+        {
+            CallNote& cn = g_callRing[g_callRingAt++ % 16];
+            const char* ef = *reinterpret_cast<const char* const*>(ctx + 56); const char* ed = *reinterpret_cast<const char* const*>(ctx + 72);
+            cn.lod = lod; cn.r = r; cn.us = unsigned(us); cn.flags4 = ed ? *reinterpret_cast<const unsigned*>(ed + 4) : 0; cn.fxZ = ef ? *reinterpret_cast<const float*>(ef + 100) : 0.0f;
+        }
+        if (us > g_iconMaxUs) g_iconMaxUs = us;
+        if (us > 200)                       // a light actually built costs far more than the frustum test
+        {
+            ++g_iconBuilt;
+            const char* effect = *reinterpret_cast<const char* const*>(ctx + 56);
+            BuildNote& b = g_buildRing[g_buildRingAt++ % 12];
+            b.camZ = cam ? *reinterpret_cast<const float*>(cam + 8) : 0.0f;
+            b.fxZ = effect ? *reinterpret_cast<const float*>(effect + 92 + 8) : 0.0f;
+            b.planes = planes ? *planes : -1; b.us = unsigned(us); b.ours = OurEffect(effect); b.hidden = g_thumbFrame;
+        }
+        return r;
     }
     // Radiant's own steps run with the user's camera, far from the stage: the stage's effects pass the time there without
     // emitting (spawn ranges), so they are left for the stage step, which then runs the whole interval with its camera.
@@ -435,9 +580,17 @@ namespace
     bool g_boxDirty = false;            // draw a frame even when the effect ended (the last look stays)
     uint64_t g_lastStepMs = 0;
     unsigned g_boxFrames = 0, g_boxMisses = 0;
-    bool g_thumbFrame = false;          // a hidden frame is being drawn: the map stays out
-    DWORD g_thumbThread = 0;            // the thread drawing it (main)
     bool g_skipMapDraws = true;         // "fxpreview dbg mapdraw 1" lets the map's helpers and selection draw again
+    unsigned g_outdoorSkips = 0;
+    bool g_skipMapFx = true;            // "fxpreview dbg mapfx 1" lets the map's effects draw in hidden frames (light icons rebuilt per frame)
+    bool g_skipOutdoor = true;          // "fxpreview dbg outdoor 1" lets hidden frames update the outdoor map (resets the user's, then a full rebuild)
+    typedef double (*OutdoorUpdateFn)(__int64 scene, int index, char flag);
+    OutdoorUpdateFn g_origOutdoorUpdate = nullptr;
+    double hk_OutdoorUpdate(__int64 scene, int index, char flag)
+    {
+        if (g_thumbFrame && g_skipOutdoor && GetCurrentThreadId() == g_thumbThread) { ++g_outdoorSkips; return 0.0; }
+        return g_origOutdoorUpdate(scene, index, flag);
+    }
     // hidden frames leave out the map's helper lines: target links (persistent lists) and the editor view's cached lines
     typedef __int64 (*DebugListsFn)(__int64 a, __int64 b, __int64 c);
     DebugListsFn g_origDebugLists = nullptr;
@@ -460,14 +613,14 @@ namespace
     const char* FxSystem();
     __int64 hk_FxDrawSprites(__int64 sys, char* effect, __int64 a3, __int64 a4, __int64 a5, __int64 a6, __int64 a7, __int64 a8, __int64 a9, __int64 a10)
     {
-        if (HiddenFromUser(effect) || OtherClock(FxSystem(), effect)) return 0;
+        if (HiddenFromUser(effect) || OtherClock(FxSystem(), effect) || (g_thumbFrame && g_skipMapFx && !OurEffect(effect))) return 0;
         return g_origFxDrawSprites(sys, effect, a3, a4, a5, a6, a7, a8, a9, a10);
     }
     typedef __int64 (*FxDrawEffectFn)(__int64, char*, __int64, __int64, __int64, __int64, __int64, __int64, __int64, __int64, __int64, __int64);
     FxDrawEffectFn g_origFxDrawEffect = nullptr;
     __int64 hk_FxDrawEffect(__int64 sys, char* effect, __int64 a3, __int64 a4, __int64 a5, __int64 a6, __int64 a7, __int64 a8, __int64 a9, __int64 a10, __int64 a11, __int64 a12)
     {
-        if (HiddenFromUser(effect) || OtherClock(FxSystem(), effect)) return 0;
+        if (HiddenFromUser(effect) || OtherClock(FxSystem(), effect) || (g_thumbFrame && g_skipMapFx && !OurEffect(effect))) return 0;
         return g_origFxDrawEffect(sys, effect, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12);
     }
     typedef void* (*CachedLinesFn)(void* lines);
@@ -491,7 +644,7 @@ namespace
     std::string g_lastLabel, g_lastStatus, g_lastPause;
 
     // widgets
-    // the window lives in Radiant's FX Browser pane: our root, or the browser's own content with a Legacy bar under it
+    // the window lives in Radiant's FX Browser pane: our root, or the browser's own content with a Previews bar under it
     void* g_root = nullptr;
     void* g_bar = nullptr;
     void* g_legacyBox = nullptr;
@@ -524,7 +677,7 @@ namespace
     void ClearGridSelection() { if (g_grid && qt.clearSelection) qt.clearSelection(g_grid); }
     void* g_pauseButton = nullptr;
     void* g_loopBox = nullptr;
-    void* g_legacyBox2 = nullptr;       // Legacy in the toggle row (g_legacyBox sits under Radiant's own browser)
+    void* g_legacyBox2 = nullptr;       // Previews box in the toggle row (g_legacyBox sits under Radiant's own browser)
     void* g_slider = nullptr;
     void* g_elapsed = nullptr;          // only without Radiant's slider class, which draws the times itself
     // that slider: +48 mode, +96 / +100 the start and end times it draws (s), +112 fps, +116 frames, +120 the animation
@@ -567,6 +720,7 @@ namespace
     HHOOK g_wheelHook = nullptr;
     bool g_asyncBox = true;             // "fxpreview dbg async 0|1": box frames copied and mapped a tick later
     uint64_t g_nextFrameUs = 0, g_boxUs = 0, g_showUs = 0, g_fpsSinceUs = 0;
+    uint64_t g_boxFrameUs = 0;              // a box frame's recent cost (smoothed): the box takes at most a quarter of the main thread
     unsigned g_boxShown = 0, g_fpsFrames = 0;
     float g_fpsNow = 0;
 
@@ -611,8 +765,8 @@ namespace
     __int64 hk_SetCamera(int client, int which, void* view)
     {
         const __int64 r = g_origSetCamera(client, which, view);
-        if (g_noCull && (g_effect || JobEffect() || g_inStage > 0) && client == 0 && which == 0)
-            if (const char* s = FxSystem()) *reinterpret_cast<int*>(const_cast<char*>(s) + off_Sys_PlaneCount) = 0;
+        if (client == 0 && which == 0 && g_inStage == 0 && !g_thumbFrame)      // Radiant's own step, the user's view
+            if (const char* s = FxSystem()) { memcpy(g_userCam, s, sizeof g_userCam); g_userCamValid = *reinterpret_cast<const int*>(s + off_Sys_PlaneCount) > 0; ++g_userCamSets; }
         return r;
     }
     char* Bridge()
@@ -629,6 +783,20 @@ namespace
     char* CamWnd() { char* bridge = Bridge(); return bridge ? *reinterpret_cast<char**>(bridge + off_Bridge_CamWnd) : nullptr; }
     bool Paused() { char* m = PlaybackMgr(); return m && m[off_Mgr_Paused] != 0; }
     bool FxRenderingOn() { return rt.renderOption ? rt.renderOption(1) : true; }
+    // A stage spawn with no frustum: the spawn core judges it by the step's four camera copies (camera 1 at +736 keeps the
+    // user's planes, which cull the stage unless the user looks at it). The map's own spawns and updates keep their cull:
+    // with every plane count zeroed instead, about a hundred normally dormant map effects emitted on zm_giant and rebuilt
+    // their lights every user frame.
+    unsigned SpawnUnculled(int def, const float* origin, const float* axis, int delayMs)
+    {
+        static const size_t kCams[4] = { 0, 368, 736, 1104 };
+        char* sys = const_cast<char*>(FxSystem());
+        int saved[4] = { 0, 0, 0, 0 };
+        if (sys && g_noCull) for (int i = 0; i < 4; ++i) { int* c = reinterpret_cast<int*>(sys + kCams[i] + off_Sys_PlaneCount); saved[i] = *c; *c = 0; }
+        const unsigned e = rt.spawn(def, origin, axis, delayMs, 1.0f);
+        if (sys && g_noCull) for (int i = 0; i < 4; ++i) *reinterpret_cast<int*>(sys + kCams[i] + off_Sys_PlaneCount) = saved[i];
+        return e;
+    }
 
     std::string CleanName(std::string fx)
     {
@@ -1363,6 +1531,7 @@ namespace
     bool CopyStripRegion();
     // 0 = not drawn, 1 = the frame's pixels in `out`, 2 = box mode: the crop is on its way to a staging texture
     bool g_halfLooks = false;           // set by Looks: its frames are read back at half size
+    bool g_dbgNoDraw = false, g_dbgNoUpkeep = false;
     int HiddenFrame(std::vector<unsigned char>& out, int& w, int& h, const BoxView* box = nullptr)
     {
         void* cam = CamWnd();
@@ -1379,14 +1548,12 @@ namespace
         }
         g_thumbFrame = true;
         g_thumbThread = GetCurrentThreadId();
-        rt.brushCacheUpd();
-        rt.poolA();
-        rt.poolB();
+        if (!g_dbgNoUpkeep) { rt.brushCacheUpd(); rt.poolA(); rt.poolB(); }
         if (rt.beginFrame())
         {
             rt.setTargets(rt.viewTarget(0), rt.viewDepth(0), 0, 0);
             rt.clear(7, kNeutral, 1.0f);
-            rt.camDraw(cam);
+            if (!g_dbgNoDraw) { IconMapScope iconMap; rt.camDraw(cam); }
             rt.endFrame();
             if (box && (g_stripOn ? CopyStripRegion() : CopyBoxRegion(*box))) ok = 2;
             else ok = ReadBackBuffer(out, w, h, g_halfLooks) ? 1 : 0;
@@ -1402,6 +1569,21 @@ namespace
 
     // "fxpreview dbg gameview 0" keeps the game view on for stage frames (isolating stage problems)
     bool g_dbgNoGameView = false;
+    // Cam_Draw gathers the sun volumes at the camera position and blends the light state when the volume changes, from the
+    // previous target state. A stage camera outside every volume would start that blend every hidden frame and the user's
+    // frames would render at the start of the blend back, with the outside state. Hidden frames pass the user's position.
+    // The Exposure toolbar's lock byte covers another gather, not this one.
+    float g_userOrigin[3] = { 0, 0, 0 };
+    bool g_keepLightState = true;      // "fxpreview dbg lightstate 0" lets hidden frames gather at the stage camera
+    unsigned g_lightStateSwaps = 0;
+    typedef __int64 (*LightStateUpdateFn)(const float*, int, unsigned, int, unsigned, unsigned);
+    LightStateUpdateFn g_origLightStateUpdate = nullptr;
+    __int64 hk_LightStateUpdate(const float* pos, int a2, unsigned a3, int a4, unsigned a5, unsigned a6)
+    {
+        if (g_thumbFrame && g_keepLightState && g_inStage > 0 && GetCurrentThreadId() == g_thumbThread) { ++g_lightStateSwaps; pos = g_userOrigin; }
+        return g_origLightStateUpdate(pos, a2, a3, a4, a5, a6);
+    }
+    bool g_dbgNoSunLock = false;       // "fxpreview dbg stagelock 0": stage frames leave the sun volume lock alone
     // the user's camera, game view and background colour, put back when the scope ends. Game view goes off because its
     // view setup does not take the camera from the origin and angles the editor view reads.
     struct StageView
@@ -1410,13 +1592,14 @@ namespace
         explicit StageView(const float camAt[3], const float* heading = nullptr) : cam(CamWnd()), gameView(0), sunLock(0)
         {
             ++g_inStage;
-            if (char* lock = At<char*>(kLockSunVolume)) { sunLock = *lock; *lock = 1; }   // no sun volume up there: the user's stays active
+            if (char* lock = At<char*>(kLockSunVolume)) { sunLock = *lock; if (!g_dbgNoSunLock) *lock = 1; }   // no sun volume up there: the user's stays active
             memcpy(back, rt.colors + kCameraBackRow * 4, sizeof back);     // Cam_Draw clears with this row
             memcpy(rt.colors + kCameraBackRow * 4, kNeutral, sizeof kNeutral);
             if (!g_dbgNoGameView && rp::host->GameView && rp::host->SetGameView) { gameView = rp::host->GameView(rp::self); if (gameView) rp::host->SetGameView(rp::self, 0); }
             if (!cam) return;
             memcpy(origin, cam + off_Cam_Origin, sizeof origin);
             memcpy(angles, cam + off_Cam_Angles, sizeof angles);
+            if (g_inStage == 1) memcpy(g_userOrigin, origin, sizeof origin);
             memcpy(cam + off_Cam_Origin, camAt, sizeof origin);
             memcpy(cam + off_Cam_Angles, heading ? heading : kStageAngles, sizeof angles);
             if (rt.anglesToAxes) rt.anglesToAxes(cam + 200);            // the cached axes turn with the angles
@@ -1424,6 +1607,7 @@ namespace
         ~StageView()
         {
             --g_inStage;
+            if (g_inStage == 0) RestoreUserCam();
             if (char* lock = At<char*>(kLockSunVolume)) *lock = sunLock;
             memcpy(rt.colors + kCameraBackRow * 4, back, sizeof back);
             if (gameView) rp::host->SetGameView(rp::self, 1);
@@ -1895,6 +2079,24 @@ namespace
         return got;
     }
     // right after a box frame's endFrame: the centre square of the back buffer into a free staging texture
+    // the back buffer as a single-sampled texture: itself, or a resolve of it when the view is multisampled
+    ID3D11Texture2D* g_resolveTex = nullptr; D3D11_TEXTURE2D_DESC g_resolveDesc = {};
+    void ReleaseResolve() { if (g_resolveTex) g_resolveTex->Release(); g_resolveTex = nullptr; }
+    ID3D11Texture2D* SingleSampled(ID3D11Device* dev, ID3D11DeviceContext* ctx, ID3D11Texture2D* back, D3D11_TEXTURE2D_DESC& desc)
+    {
+        if (desc.SampleDesc.Count <= 1) return back;
+        if (!g_resolveTex || g_resolveDesc.Width != desc.Width || g_resolveDesc.Height != desc.Height || g_resolveDesc.Format != desc.Format)
+        {
+            ReleaseResolve();
+            D3D11_TEXTURE2D_DESC d = desc;
+            d.SampleDesc.Count = 1; d.SampleDesc.Quality = 0; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_SHADER_RESOURCE; d.CPUAccessFlags = 0; d.MiscFlags = 0; d.MipLevels = 1; d.ArraySize = 1;
+            if (FAILED(dev->CreateTexture2D(&d, nullptr, &g_resolveTex))) { g_resolveTex = nullptr; return nullptr; }
+            g_resolveDesc = desc;
+        }
+        ctx->ResolveSubresource(g_resolveTex, 0, back, 0, desc.Format);
+        desc.SampleDesc.Count = 1;
+        return g_resolveTex;
+    }
     bool CopyBoxRegion(const BoxView& view)
     {
         if (!g_asyncBox) return false;
@@ -1907,7 +2109,8 @@ namespace
         D3D11_TEXTURE2D_DESC desc = {};
         back->GetDesc(&desc);
         bool ok = false;
-        if (desc.SampleDesc.Count == 1 && (IsBgra(desc.Format) || IsRgba(desc.Format)))
+        ID3D11Texture2D* from = SingleSampled(dev, ctx, back, desc);
+        if (from && (IsBgra(desc.Format) || IsRgba(desc.Format)))
         {
             BoxSlot* slot = nullptr;
             for (BoxSlot& s : g_slots) if (!s.pending) { slot = &s; break; }
@@ -1927,7 +2130,7 @@ namespace
             {
                 const int x0 = (w - side) / 2, y0 = (h - side) / 2;
                 const D3D11_BOX src = { UINT(x0), UINT(y0), 0, UINT(x0 + side), UINT(y0 + side), 1 };
-                ctx->CopySubresourceRegion(slot->tex, 0, 0, 0, 0, back, 0, &src);
+                ctx->CopySubresourceRegion(slot->tex, 0, 0, 0, 0, from, 0, &src);
                 slot->pending = true; slot->seq = ++g_slotSeq; slot->view = view;
                 slot->fw = w; slot->fh = h; slot->x0 = x0; slot->y0 = y0;
                 ok = true;
@@ -1941,7 +2144,8 @@ namespace
     // The square is shrunk on the GPU to the smallest mip still at least kThumbSize (side px of the frame, px read back)
     struct StripTex { ID3D11Texture2D* tex; int side, px, level; DXGI_FORMAT fmt; int used, fw, fh, x0, y0; };
     StripTex g_strip = {};
-    void ReleaseStrip() { if (g_strip.tex) g_strip.tex->Release(); g_strip = StripTex(); ReleaseMip(g_mipStrip); ReleaseLookTex(); }
+    void ReleaseResolve();
+    void ReleaseStrip() { if (g_strip.tex) g_strip.tex->Release(); g_strip = StripTex(); ReleaseMip(g_mipStrip); ReleaseLookTex(); ReleaseResolve(); }
     bool CopyStripRegion()
     {
         IDXGISwapChain* sc = *rt.swapChain0;
@@ -1953,15 +2157,16 @@ namespace
         D3D11_TEXTURE2D_DESC desc = {};
         back->GetDesc(&desc);
         bool ok = false;
+        ID3D11Texture2D* from = SingleSampled(dev, ctx, back, desc);
         const int w = int(desc.Width), h = int(desc.Height);
         int level = 0;
         while (g_gpuShrink && level < 4 && (BoxSide(w, h) >> (level + 1)) >= kThumbSize) ++level;
         const int side = (BoxSide(w, h) >> level) << level;     // whole mip texels
         const int x0 = (w - side) / 2, y0 = (h - side) / 2;
         const D3D11_BOX src = { UINT(x0), UINT(y0), 0, UINT(x0 + side), UINT(y0 + side), 1 };
-        if (desc.SampleDesc.Count == 1 && (IsBgra(desc.Format) || IsRgba(desc.Format)))
+        if (from && (IsBgra(desc.Format) || IsRgba(desc.Format)))
         {
-            if (level && !MipDown(g_mipStrip, back, desc.Format, src, level + 1)) level = 0;
+            if (level && !MipDown(g_mipStrip, from, desc.Format, src, level + 1)) level = 0;
             const int px = side >> level;
             const DXGI_FORMAT fmt = level ? g_mipStrip.fmt : desc.Format;
             const bool same = g_strip.tex && g_strip.side == side && g_strip.px == px && g_strip.fmt == fmt;
@@ -1979,7 +2184,7 @@ namespace
             {
                 const UINT dst = D3D11CalcSubresource(0, UINT(g_strip.used), 1);
                 if (level) ctx->CopySubresourceRegion(g_strip.tex, dst, 0, 0, 0, g_mipStrip.tex, D3D11CalcSubresource(UINT(level), 0, UINT(level + 1)), nullptr);
-                else ctx->CopySubresourceRegion(g_strip.tex, dst, 0, 0, 0, back, 0, &src);
+                else ctx->CopySubresourceRegion(g_strip.tex, dst, 0, 0, 0, from, 0, &src);
                 g_strip.fw = w; g_strip.fh = h; g_strip.x0 = x0; g_strip.y0 = y0;
                 ++g_strip.used;
                 ok = true;
@@ -2022,7 +2227,7 @@ namespace
                 static const float axis[9] = { 1, 0, 0, 0, 1, 0, 0, 0, 1 };
                 StageView view(bv.eye, bv.ang);
                 StepFx(0.0);                        // hands the fx system the stage camera: a spawn is culled against its last one
-                h = rt.spawn(def, kStage, axis, delayMs, 1.0f);
+                h = SpawnUnculled(def, kStage, axis, delayMs);
             }
         }
         RestoreUserSteps();
@@ -2122,7 +2327,7 @@ namespace
             }
             return;
         }
-        const uint64_t us = NowUs(), interval = 1000000 / (g_boxFps ? g_boxFps : 30);
+        const uint64_t us = NowUs(), interval = std::max<uint64_t>(1000000 / (g_boxFps ? g_boxFps : 30), g_boxFrameUs * 3);
         if (us < g_nextFrameUs) return;
         g_nextFrameUs = us - g_nextFrameUs < interval ? g_nextFrameUs + interval : us + interval;   // steady cadence, no catch-up bursts
         if (us - g_fpsSinceUs >= 1000000) { g_fpsNow = g_fpsSinceUs ? float(g_fpsFrames) * 1e6f / float(us - g_fpsSinceUs) : 0.0f; g_fpsFrames = 0; g_fpsSinceUs = us; }
@@ -2146,7 +2351,7 @@ namespace
                 const int age = int((NowUs() - g_scrubStartUs) / 4000) % kScrubSpanMs;
                 Dispose(g_effect);
                 StepFx(0.0);                                // a spawn is culled against the last step's camera
-                g_effect = rt.spawn(g_def, kStage, axis, -age, 1.0f);
+                g_effect = SpawnUnculled(g_def, kStage, axis, -age);
                 StepFx(0.001);
             }
             else if (alive) StepBox();                      // one more step this tick, under the stage camera
@@ -2155,7 +2360,7 @@ namespace
             const uint64_t t0 = NowUs();
             const int got = HiddenFrame(pixels, w, h, &bv);
             if (got == 1) ShowFrame(pixels, w, h, bv);
-            if (got) { ++g_boxFrames; g_boxUs += NowUs() - t0; }
+            if (got) { ++g_boxFrames; const uint64_t cost = NowUs() - t0; g_boxUs += cost; g_boxFrameUs = g_boxFrameUs ? (g_boxFrameUs * 3 + cost) / 4 : cost; }
             else ++g_boxMisses;
             g_boxDirty = false;
         }
@@ -2177,63 +2382,75 @@ namespace
 
     // Looks at `def` from kMeasureDist (0.35, 1 and 1.8 s into its life): the first at least half as busy as the busiest
     // (a burst's flash beats its smoke), or the busiest of all six when early looks were added. Then measured.
-    bool Looks(int def, std::vector<unsigned char>& best, int& bestW, int& bestH, Fit& fit, std::string& why)
+    // The measuring looks, one per call so a job can spread them over ticks: three over the effect's first seconds, three
+    // early ones when those show next to nothing (muzzle flashes, sparks). Each look costs a spawn, a step and a hidden frame.
+    struct LookSet
     {
+        std::vector<unsigned char> frames[6];
+        size_t scores[6] = { 0, 0, 0, 0, 0, 0 }, top = 0;
+        bool halves[6] = {};
+        int looks = 3, done = 0, w = 0, h = 0;
+    };
+    static const int kLookAt[6] = { int(kThumbSeconds * 350), int(kThumbSeconds * 1000), int(kThumbSeconds * 1800), 15, 60, 150 };
+    struct HalfLooks { HalfLooks() { g_halfLooks = true; } ~HalfLooks() { g_halfLooks = false; } };
+    bool LookOnce(int def, LookSet& L, std::string& why)
+    {
+        static const float axis[9] = { 1, 0, 0, 0, 1, 0, 0, 0, 1 };
         float camAt[3];
         FrameCamera(kMeasureDist, camAt);
-        static const float axis[9] = { 1, 0, 0, 0, 1, 0, 0, 0, 1 };
         SetStageDef(def);
         StageView view(camAt);
-        StepFx(0.0);                        // the fx system's camera becomes the stage before the spawns
-        // three looks over its first seconds, three early ones when those show next to nothing (muzzle flashes, sparks)
-        const int at[6] = { int(kThumbSeconds * 350), int(kThumbSeconds * 1000), int(kThumbSeconds * 1800), 15, 60, 150 };
-        std::vector<unsigned char> frames[6];
-        size_t scores[6] = { 0, 0, 0, 0, 0, 0 };
-        bool halves[6] = {};
-        struct HalfScope { HalfScope() { g_halfLooks = true; } ~HalfScope() { g_halfLooks = false; } } halfScope;
-        int w = 0, h = 0;
-        size_t top = 0;
-        fit = Fit();
-        int looks = 3;
-        for (int i = 0; i < looks; ++i)
-        {
-            unsigned e = rt.spawn(def, kStage, axis, -at[i], 1.0f);     // that far into its life: the step emits the backlog
-            if (!e) { why = "the fx system refused the effect"; return false; }
-            StepFx(0.001);
-            const bool got = HiddenFrame(frames[i], w, h);
-            halves[i] = g_readHalf;
-            Dispose(e);
-            if (!got) { why = "hidden frame failed"; return false; }
-            const std::vector<unsigned char>& px = frames[i];
-            for (size_t p = 0; p + 3 < px.size(); p += halves[i] ? 4 : 16)    // pixels that are not the plain background
-                if (abs(int(px[p]) - 46) + abs(int(px[p + 1]) - 46) + abs(int(px[p + 2]) - 46) > 40) ++scores[i];
-            if (scores[i] > top) top = scores[i];
-            if (i == 2 && top < 8) looks = 6;
-        }
+        StepFx(0.0);                        // the fx system's camera becomes the stage before the spawn
+        HalfLooks half;
+        const int i = L.done;
+        unsigned e = SpawnUnculled(def, kStage, axis, -kLookAt[i]);     // that far into its life: the step emits the backlog
+        if (!e) { why = "the fx system refused the effect"; return false; }
+        StepFx(0.001);
+        const bool got = HiddenFrame(L.frames[i], L.w, L.h);
+        L.halves[i] = g_readHalf;
+        Dispose(e);
+        if (!got) { why = "hidden frame failed"; return false; }
+        const std::vector<unsigned char>& px = L.frames[i];
+        for (size_t p = 0; p + 3 < px.size(); p += L.halves[i] ? 4 : 16)    // pixels that are not the plain background
+            if (abs(int(px[p]) - 46) + abs(int(px[p + 1]) - 46) + abs(int(px[p + 2]) - 46) > 40) ++L.scores[i];
+        if (L.scores[i] > L.top) L.top = L.scores[i];
+        ++L.done;
+        if (L.done == 3 && L.top < 8) L.looks = 6;
+        return true;
+    }
+    // the pick among the looks, its fit, and a closer look for a small effect (its fit kept in kMeasureDist terms)
+    bool LooksFinish(int def, LookSet& L, std::vector<unsigned char>& best, int& bestW, int& bestH, Fit& fit, std::string& why)
+    {
+        static const float axis[9] = { 1, 0, 0, 0, 1, 0, 0, 0, 1 };
         int pick = 0;
-        if (looks == 3) while (pick < 2 && scores[pick] * 2 < top) ++pick;
-        else for (int i = 1; i < looks; ++i) if (scores[i] > scores[pick]) pick = i;
-        best.swap(frames[pick]);
-        bestW = w; bestH = h;
-        MeasureFrame(best, bestW, bestH, fit, halves[pick] ? 1 : 2);
-        if (fit.ok && fit.size < 0.12f)     // a small effect: the same look again from closer, the fit kept in kMeasureDist terms
+        if (L.looks == 3) while (pick < 2 && L.scores[pick] * 2 < L.top) ++pick;
+        else for (int i = 1; i < L.looks; ++i) if (L.scores[i] > L.scores[pick]) pick = i;
+        best.swap(L.frames[pick]);
+        bestW = L.w; bestH = L.h;
+        fit = Fit();
+        MeasureFrame(best, bestW, bestH, fit, L.halves[pick] ? 1 : 2);
+        if (fit.ok && fit.size < 0.12f)
         {
-            const float dist = kMeasureDist * fit.size / 0.3f;
-            FrameCamera(dist < 24.0f ? 24.0f : dist, camAt);
-            memcpy(view.cam + off_Cam_Origin, camAt, sizeof camAt);
+            const float dist = std::max(24.0f, kMeasureDist * fit.size / 0.3f);
+            float camAt[3];
+            FrameCamera(dist, camAt);
+            SetStageDef(def);
+            StageView view(camAt);
             StepFx(0.0);
-            unsigned e = rt.spawn(def, kStage, axis, -at[pick], 1.0f);
+            HalfLooks half;
+            unsigned e = SpawnUnculled(def, kStage, axis, -kLookAt[pick]);
             std::vector<unsigned char> close;
             Fit closeFit;
+            int w = 0, h = 0;
             if (e)
             {
                 StepFx(0.001);
                 const bool got = HiddenFrame(close, w, h);
-                const bool half = g_readHalf;
+                const bool halfRead = g_readHalf;
                 Dispose(e);
-                if (got && MeasureFrame(close, w, h, closeFit, half ? 1 : 2))
+                if (got && MeasureFrame(close, w, h, closeFit, halfRead ? 1 : 2))
                 {
-                    const float k = (dist < 24.0f ? 24.0f : dist) / kMeasureDist;
+                    const float k = dist / kMeasureDist;
                     fit.cx = closeFit.cx * k; fit.cy = closeFit.cy * k; fit.size = closeFit.size * k;
                     best.swap(close); bestW = w; bestH = h;
                     fit.ok = true;
@@ -2245,7 +2462,14 @@ namespace
         }
         g_fitScale = 1.0f;
         fit.scale = 1.0f;
+        (void)why;
         return true;
+    }
+    bool Looks(int def, std::vector<unsigned char>& best, int& bestW, int& bestH, Fit& fit, std::string& why)
+    {
+        LookSet L;
+        while (L.done < L.looks) if (!LookOnce(def, L, why)) return false;
+        return LooksFinish(def, L, best, bestW, bestH, fit, why);
     }
 
     // ---- the filmstrip job: an effect filmed from the box's home view, grid and axes on, spread over ticks ----
@@ -2273,6 +2497,7 @@ namespace
         int best = 0, lastLit = -1;
         uint64_t us = 0, beganMs = 0;
         int slices = 0;
+        LookSet looks;                  // the measuring looks so far, one or more per slice
     };
     StripJob g_job;
     std::vector<unsigned char> g_doneStrip;     // the strip the job just wrote (BGRA, kThumbSize wide), cut without a decode
@@ -2301,6 +2526,8 @@ namespace
     }
     unsigned g_stripUs = 0, g_strips = 0;   // the last strip's time on the main thread, strips made (status)
     unsigned g_sliceMaxUs = 0;              // the longest job slice since "dbg resetstats"
+    unsigned g_stripWaits = 0;              // compose slices that found the GPU still drawing the strip
+    int g_sliceMaxAt = -1;                  // where it was: phase * 100 + the look or frame index it began at
     uint64_t g_sumWorkUs = 0, g_sumWallMs = 0, g_sumSlices = 0, g_sumStrips = 0;     // strips since "dbg resetstats"
 
     unsigned g_refilms = 0;                 // strips filmed again in one go after streaks
@@ -2437,6 +2664,7 @@ namespace
         return true;
     }
     // One slice of the job, about `budgetUs`. 0 = more to do, 1 = written, -1 = failed (g_job.why).
+    void NeutralizeStrip(unsigned char* px, int w, int h, int stride);
     int StepJob(uint64_t budgetUs)
     {
         if (!g_job.active) return -1;
@@ -2449,22 +2677,32 @@ namespace
         static const float axis[9] = { 1, 0, 0, 0, 1, 0, 0, 0, 1 };
         StripJob& j = g_job;
         const int phaseAtStart = j.phase;
+        const int stepAtStart = j.phase == 0 ? j.looks.done : j.k;
         OwnClock clock(&j.clock);
         bool failed = false;
         {
             QuietScope quiet;
-            if (j.phase == 0)               // the fit (measuring looks), the view, the spawn
+            if (j.phase == 0)               // the fit (measuring looks, spread over slices), the view, the spawn
             {
                 SetStageDef(j.def);
                 if (!FitOf(j.name))
                 {
-                    std::vector<unsigned char> best;
-                    int w = 0, h = 0;
-                    Fit fit;
-                    if (Looks(j.def, best, w, h, fit, j.why)) g_fits[j.name] = fit;
-                    else failed = true;
+                    while (!failed && j.looks.done < j.looks.looks)
+                    {
+                        if (!LookOnce(j.def, j.looks, j.why)) failed = true;
+                        else if (j.looks.done < j.looks.looks && spent()) break;     // the next look on the next tick
+                    }
+                    if (!failed && j.looks.done >= j.looks.looks)
+                    {
+                        std::vector<unsigned char> best;
+                        int w = 0, h = 0;
+                        Fit fit;
+                        if (LooksFinish(j.def, j.looks, best, w, h, fit, j.why)) g_fits[j.name] = fit;
+                        else failed = true;
+                        j.looks = LookSet();
+                    }
                 }
-                if (!failed)
+                if (!failed && FitOf(j.name))
                 {
                     const int life = EffectLengthMs(j.def);
                     j.start = life > 0 ? 0 : kStripWarmMs;
@@ -2481,7 +2719,7 @@ namespace
                     if (view.cam) memcpy(view.cam + off_Cam_Origin, j.bv.eye, sizeof j.bv.eye);
                     memcpy(g_boxCam, j.bv.eye, sizeof g_boxCam);    // the update hook judges the stage effect from here
                     StepFx(0.0);                                    // a spawn is culled against the last step's camera
-                    j.effect = rt.spawn(j.def, kStage, axis, -j.start, 1.0f);
+                    j.effect = SpawnUnculled(j.def, kStage, axis, -j.start);
                     if (!j.effect) { j.why = "the fx system refused the effect"; failed = true; }
                     g_strip.used = 0;
                     j.phase = 1;
@@ -2535,7 +2773,9 @@ namespace
                 {
                     const UINT sub = D3D11CalcSubresource(0, UINT(j.slice[size_t(k)]), 1);
                     D3D11_MAPPED_SUBRESOURCE map = {};
-                    if (SUCCEEDED(ctx->Map(g_strip.tex, sub, D3D11_MAP_READ, 0, &map)))
+                    const HRESULT hr = ctx->Map(g_strip.tex, sub, D3D11_MAP_READ, budgetUs == ~0ull ? 0 : D3D11_MAP_FLAG_DO_NOT_WAIT, &map);
+                    if (hr == DXGI_ERROR_WAS_STILL_DRAWING) { ++g_stripWaits; break; }     // the GPU is behind: this frame next slice
+                    if (SUCCEEDED(hr))
                     {
                         sq.resize(size_t(j.px) * j.px * 4);
                         for (int y = 0; y < j.px; ++y)
@@ -2585,6 +2825,7 @@ namespace
         bool done = false;
         if (!failed && j.phase == 3 && (!spent() || j.idx >= 0))
         {
+            NeutralizeStrip(j.strip.data(), kThumbSize, kThumbSize * (j.n + 1), kThumbSize * 4);
             if (j.idx >= 0) { g_doneStrip = j.strip; SaveLater(std::move(j.strip), j.n + 1, j.path); }     // the grid's: written behind
             else if (!WriteStrip(j.strip, j.n + 1, j.path)) { j.why = "could not write " + Utf8(j.path.c_str(), int(j.path.size())); failed = true; }
             done = true;
@@ -2592,7 +2833,7 @@ namespace
         const uint64_t took = NowUs() - t0;
         j.us += took;
         ++j.slices;
-        if (took > g_sliceMaxUs) g_sliceMaxUs = unsigned(took);
+        if (took > g_sliceMaxUs) { g_sliceMaxUs = unsigned(took); g_sliceMaxAt = phaseAtStart * 100 + stepAtStart + (j.whole ? 1000 : 0); }
         if (failed) return EndJob(false) ? 1 : -1;
         if (done) return EndJob(true) ? 1 : -1;
         return 0;                               // Radiant's ticks leave the filmed effect where it is (OtherClock)
@@ -2665,22 +2906,53 @@ namespace
 
     // ---- animated thumbnails in the grid: each strip cut into icons of the shown size, the rows on screen cycle them ----
     struct IconBuf { alignas(16) char b[16]; };     // a constructed QIcon, moved by plain copies
-    // icons: [0] the poster, then the loop. poster: frame 0 at file size, rescaled while the size slider moves
-    struct Anim { std::vector<IconBuf> icons; uint64_t seenMs = 0; alignas(16) char poster[64]; bool hasPoster = false; };
+    struct ImgBuf { alignas(16) char b[64]; };      // a constructed QImage, moved by plain copies
+    // icons: [0] the poster, then the loop. poster: frame 0 at file size, rescaled while the size slider moves.
+    // Only the rows on screen keep their icons (kAnimKeepMs after they leave), the grid item holds the last frame shown.
+    struct Anim { std::vector<IconBuf> icons; uint64_t seenMs = 0; int row = -1; ImgBuf poster; bool hasPoster = false; };
     std::map<int, Anim> g_anims;        // by effect (index into g_all)
     std::vector<int> g_onScreen;        // grid rows on screen at the last RefreshVisible
+    uint64_t g_lastCamMoveMs = 0, g_lastInputMs = 0, g_lastScrollMs = 0;   // UserBusy: the queue waits while the user works
+    float g_lastCam[6] = {};
+    int g_lastFirstRow = -1;
     bool g_animate = true;              // [fxpreview] animate
     uint64_t g_lastAnimTick = 0;
-    const size_t kAnimCache = 300;      // effects kept cut into icons, the least recently seen go first
+    const uint64_t kAnimKeepMs = 1500;  // icons of a row off screen live this long (a short scroll back costs no cut)
+    const int kKeepScreens = 2;         // rows this many screens away from the view drop their tile (cut again on return)
     void FreeIcons(Anim& a) { for (IconBuf& i : a.icons) qt.iconDtor(i.b); a.icons.clear(); }
-    void FreeAnim(Anim& a) { FreeIcons(a); if (a.hasPoster) qt.imageDtor(a.poster); a.hasPoster = false; }
+    void FreeAnim(Anim& a) { FreeIcons(a); if (a.hasPoster) qt.imageDtor(a.poster.b); a.hasPoster = false; }
     void FreeAnims() { for (auto& kv : g_anims) FreeAnim(kv.second); g_anims.clear(); }
     // a strip file (a plain square image is one frame) cut into icons of the shown size
-    uint64_t g_loadUs = 0; unsigned g_loads = 0;     // icons cut since "dbg resetstats" (status)
+    uint64_t g_loadUs = 0; unsigned g_loads = 0;     // icons cut on the main thread since "dbg resetstats" (status)
+    uint64_t g_cutUs = 0; unsigned g_cuts = 0;       // strips cut on the worker (status)
     uint64_t g_liveUs = 0; unsigned g_lives = 0;     // live icon size steps (status)
-    bool LoadIcons(const std::wstring& path, Anim& a, const std::vector<unsigned char>* strip = nullptr)
+    // A strip's background is the stage view's far background: neutral on a small map, the sky's colour where the stage sits
+    // inside a big map's sky (zm_giant: 38 48 60 against 38 38 38). The offset measured in the poster's corners is taken off
+    // every pixel so tiles from different maps and sessions match.
+    unsigned g_neutralized = 0;
+    void NeutralizeStrip(unsigned char* px, int w, int h, int stride)
     {
-        const uint64_t t0 = NowUs();
+        if (!px || w < 16 || h < 16 || stride < w * 4) return;
+        long sum[3] = { 0, 0, 0 }; int n = 0;
+        const int corners[4][2] = { { 2, 2 }, { w - 6, 2 }, { 2, std::min(h, w) - 6 }, { w - 6, std::min(h, w) - 6 } };
+        for (const auto& c : corners)
+            for (int y = c[1]; y < c[1] + 4; ++y) for (int x = c[0]; x < c[0] + 4; ++x)
+            { const unsigned char* q = px + size_t(y) * stride + size_t(x) * 4; sum[0] += q[0]; sum[1] += q[1]; sum[2] += q[2]; ++n; }
+        int delta[3];
+        for (int i = 0; i < 3; ++i) delta[i] = int(sum[i] / n) - 38;
+        if (abs(delta[0]) <= 3 && abs(delta[1]) <= 3 && abs(delta[2]) <= 3) return;
+        for (int y = 0; y < h; ++y)
+        {
+            unsigned char* row = px + size_t(y) * stride;
+            for (int x = 0; x < w; ++x, row += 4)
+                for (int i = 0; i < 3; ++i) { const int v = int(row[i]) - delta[i]; row[i] = unsigned char(v < 0 ? 0 : v > 255 ? 255 : v); }
+        }
+        ++g_neutralized;
+    }
+    // The strip (a file, or the job's raw RGB32 frames) decoded and cut into frames of `size` px. QImage only, so it runs on
+    // the cutter thread too. poster: frame 0 at file size when none is held yet.
+    int CutFrames(const std::wstring& path, const std::vector<unsigned char>* strip, int size, std::vector<ImgBuf>& frames, ImgBuf& poster, bool& hasPoster)
+    {
         alignas(16) char qs[16], img[64];
         const size_t frameBytes = size_t(kThumbSize) * kThumbSize * 4;
         if (strip && strip->size() >= frameBytes)
@@ -2693,24 +2965,143 @@ namespace
         }
         const int w = qt.imageWidth(img), h = qt.imageHeight(img);
         const int n = w > 0 ? std::min(h / w, kStripMaxFrames + 1) : 0;
+        if (n > 0 && !strip && qt.imageBits && qt.imageBytesPerLine && qt.imageBytesPerLine(img) == w * 4)     // a cached strip: 32-bit rows
+            NeutralizeStrip(qt.imageBits(img), w, h, w * 4);
         for (int k = 0; k < n; ++k)
         {
-            alignas(16) char frame[64], scaled[64], pix[64];
-            IconBuf icon;
-            const bool scale = w != g_iconSize;
-            qt.imageCopy(img, frame, 0, k * w, w, w);
-            if (k == 0 && !a.hasPoster) { qt.imageCopy(frame, a.poster, 0, 0, w, w); a.hasPoster = true; }
-            if (scale) qt.imageScaled(frame, scaled, g_iconSize, g_iconSize, 1 /* KeepAspectRatio */, 1 /* Smooth */);
-            qt.pixmapFromImage(pix, scale ? scaled : frame, 0);
-            qt.iconFromPixmap(icon.b, pix);
-            qt.pixmapDtor(pix);
-            if (scale) qt.imageDtor(scaled);
-            qt.imageDtor(frame);
-            a.icons.push_back(icon);
+            ImgBuf frame;
+            qt.imageCopy(img, frame.b, 0, k * w, w, w);
+            if (k == 0 && !hasPoster) { qt.imageCopy(frame.b, poster.b, 0, 0, w, w); hasPoster = true; }
+            if (w != size)
+            {
+                ImgBuf scaled;
+                qt.imageScaled(frame.b, scaled.b, size, size, 1 /* KeepAspectRatio */, 1 /* Smooth */);
+                qt.imageDtor(frame.b);
+                frame = scaled;
+            }
+            frames.push_back(frame);
         }
         qt.imageDtor(img);
+        return n;
+    }
+    void FreeFrames(std::vector<ImgBuf>& frames) { for (ImgBuf& f : frames) qt.imageDtor(f.b); frames.clear(); }
+    // main thread: the frames become the row's icons (pixmaps live on this thread only)
+    void IconsFromFrames(std::vector<ImgBuf>& frames, Anim& a)
+    {
+        for (ImgBuf& f : frames)
+        {
+            alignas(16) char pix[64];
+            IconBuf icon;
+            qt.pixmapFromImage(pix, f.b, 0);
+            qt.iconFromPixmap(icon.b, pix);
+            qt.pixmapDtor(pix);
+            qt.imageDtor(f.b);
+            a.icons.push_back(icon);
+        }
+        frames.clear();
+    }
+    bool LoadIcons(const std::wstring& path, Anim& a, const std::vector<unsigned char>* strip = nullptr)
+    {
+        const uint64_t t0 = NowUs();
+        std::vector<ImgBuf> frames;
+        const int n = CutFrames(path, strip, g_iconSize, frames, a.poster, a.hasPoster);
+        IconsFromFrames(frames, a);
         g_loadUs += NowUs() - t0; ++g_loads;
         return n > 0;
+    }
+
+    // ---- the cutter thread: strips of rows coming on screen are decoded and scaled off the main thread ----
+    // A cut costs about 3.4 ms of main thread per row otherwise (a screenful of 45 rows: 150 ms of jank). Facts:
+    struct CutJob { int idx; int row; int size; std::wstring path; std::vector<unsigned char> strip; };   // strip: raw frames from the job, else the file
+    struct CutDone { int idx = -1; int row = -1; int size = 0; uint64_t us = 0; std::vector<ImgBuf> frames; ImgBuf poster; bool hasPoster = false; };
+    std::mutex g_cutMx;
+    std::condition_variable g_cutCv;
+    std::vector<CutJob> g_cutJobs;
+    std::vector<CutDone> g_cutDone;
+    std::thread g_cutter;
+    bool g_cutterStop = false;
+    struct CutterExitGuard { ~CutterExitGuard() { if (g_cutter.joinable()) g_cutter.detach(); } } g_cutterExitGuard;   // see SaverExitGuard
+    std::set<int> g_cutting;            // effects on the worker (main thread); a result for an effect not in it is dropped
+    std::set<int> g_tiledRows;          // grid rows whose item holds an icon (cleared again far from the view)
+    void CutterLoop()
+    {
+        for (;;)
+        {
+            CutJob job;
+            {
+                std::unique_lock<std::mutex> lock(g_cutMx);
+                g_cutCv.wait(lock, [] { return g_cutterStop || !g_cutJobs.empty(); });
+                if (g_cutJobs.empty()) return;
+                job = std::move(g_cutJobs.front());
+                g_cutJobs.erase(g_cutJobs.begin());
+            }
+            CutDone d;
+            d.idx = job.idx; d.row = job.row; d.size = job.size;
+            try
+            {
+                const uint64_t t0 = NowUs();
+                CutFrames(job.path, job.strip.empty() ? nullptr : &job.strip, job.size, d.frames, d.poster, d.hasPoster);
+                d.us = NowUs() - t0;
+            }
+            catch (...) { FreeFrames(d.frames); }
+            std::lock_guard<std::mutex> lock(g_cutMx);
+            g_cutDone.push_back(std::move(d));
+        }
+    }
+    void CutLater(int idx, int row, std::vector<unsigned char> strip = std::vector<unsigned char>())
+    {
+        if (!strip.empty()) g_cutting.erase(idx);          // the job's fresh strip replaces a cut of the old file
+        if (!g_cutting.insert(idx).second) return;
+        {
+            std::lock_guard<std::mutex> lock(g_cutMx);
+            g_cutJobs.push_back({ idx, row, g_iconSize, ThumbPath(g_all[size_t(idx)]), std::move(strip) });
+            g_cutterStop = false;
+        }
+        if (!g_cutter.joinable()) g_cutter = std::thread(CutterLoop);
+        g_cutCv.notify_one();
+    }
+    void StopCutter()
+    {
+        { std::lock_guard<std::mutex> lock(g_cutMx); g_cutterStop = true; g_cutJobs.clear(); }
+        g_cutCv.notify_one();
+        if (g_cutter.joinable()) g_cutter.join();
+        for (CutDone& d : g_cutDone) { FreeFrames(d.frames); if (d.hasPoster) qt.imageDtor(d.poster.b); }
+        g_cutDone.clear();
+        g_cutting.clear();
+    }
+    int RowOf(int idx)
+    {
+        for (size_t r = 0; r < g_rows.size(); ++r) if (g_rows[r] == idx) return int(r);
+        return -1;
+    }
+    const IconBuf* AnimFrame(const Anim& a);
+    // finished cuts become icons; a cut at an old size, or for an effect since remade, is dropped and the row looked at again
+    void CollectCuts()
+    {
+        std::vector<CutDone> done;
+        { std::lock_guard<std::mutex> lock(g_cutMx); done.swap(g_cutDone); }
+        const uint64_t now = GetTickCount64();
+        for (CutDone& d : done)
+        {
+            g_cutUs += d.us; ++g_cuts;
+            const bool wanted = g_cutting.erase(d.idx) > 0;
+            const int row = size_t(d.row) < g_rows.size() && g_rows[size_t(d.row)] == d.idx ? d.row : RowOf(d.idx);
+            if (!wanted || d.size != g_iconSize || row < 0 || !g_grid || !g_qtOk)
+            {
+                FreeFrames(d.frames);
+                if (d.hasPoster) qt.imageDtor(d.poster.b);
+                if (wanted && row >= 0 && size_t(row) < g_rowState.size() && g_rowState[size_t(row)] == 3) g_rowState[size_t(row)] = 0;
+                continue;
+            }
+            Anim& a = g_anims[d.idx];
+            FreeAnim(a);
+            IconsFromFrames(d.frames, a);
+            if (d.hasPoster) { a.poster = d.poster; a.hasPoster = true; }
+            a.seenMs = now;
+            a.row = row;
+            if (size_t(row) < g_rowState.size() && g_rowState[size_t(row)] == 3) g_rowState[size_t(row)] = 1;
+            if (const IconBuf* icon = AnimFrame(a)) if (void* item = qt.item(g_grid, row)) { qt.setItemIcon(item, icon->b); g_tiledRows.insert(row); }
+        }
     }
     // the frame a row shows now: the poster when still, else the loop's frame for this tick
     const IconBuf* AnimFrame(const Anim& a)
@@ -2719,21 +3110,45 @@ namespace
         if (!g_animate || a.icons.size() < 3) return &a.icons[0];
         return &a.icons[1 + size_t(g_lastAnimTick % (a.icons.size() - 1))];
     }
+    Anim g_placeholder;                 // the "no thumbnail" tile, one icon shared by every failed row
     void SetRowIcon(int row, const Entry& e, bool placeholder = false, bool reload = false, const std::vector<unsigned char>* strip = nullptr)
     {
         if (!g_grid || !g_qtOk || size_t(row) >= g_rows.size()) return;
         void* item = qt.item(g_grid, row);
         if (!item) return;
+        if (placeholder)
+        {
+            if (g_placeholder.icons.empty() && FileExists(PlaceholderPath())) LoadIcons(PlaceholderPath(), g_placeholder);
+            if (!g_placeholder.icons.empty()) { qt.setItemIcon(item, g_placeholder.icons[0].b); g_tiledRows.insert(row); }
+            return;
+        }
         Anim& a = g_anims[g_rows[size_t(row)]];
         if (reload || a.icons.empty())
         {
             FreeAnim(a);
-            const std::wstring p = placeholder ? PlaceholderPath() : ThumbPath(e);
-            if (strip && !placeholder) LoadIcons(p, a, strip);
+            const std::wstring p = ThumbPath(e);
+            if (strip) LoadIcons(p, a, strip);
             else if (FileExists(p)) LoadIcons(p, a);
         }
         a.seenMs = GetTickCount64();
-        if (const IconBuf* icon = AnimFrame(a)) qt.setItemIcon(item, icon->b);
+        a.row = row;
+        if (const IconBuf* icon = AnimFrame(a)) { qt.setItemIcon(item, icon->b); g_tiledRows.insert(row); }
+    }
+    // a row's tile cleared: its icons freed, the item's icon dropped, the row looked at again when it comes back
+    void DropRowTile(int row)
+    {
+        if (size_t(row) >= g_rows.size()) return;
+        const auto it = g_anims.find(g_rows[size_t(row)]);
+        if (it != g_anims.end()) { FreeAnim(it->second); g_anims.erase(it); }
+        if (qt.iconCtor && g_grid)
+        {
+            static IconBuf nullIcon;
+            static bool made = false;
+            if (!made) { qt.iconCtor(nullIcon.b); made = true; }
+            if (void* item = qt.item(g_grid, row)) qt.setItemIcon(item, nullIcon.b);
+        }
+        g_tiledRows.erase(row);
+        if (size_t(row) < g_rowState.size() && g_rowState[size_t(row)] != 3) g_rowState[size_t(row)] = 0;
     }
     // the rows on screen step to the next frame kStripFps times a second
     void AnimateGrid(uint64_t now)
@@ -2760,16 +3175,17 @@ namespace
             if (void* item = qt.item(g_grid, r)) qt.setItemIcon(item, AnimFrame(it->second)->b);
         }
     }
+    // icons of rows off screen for kAnimKeepMs are freed; the item keeps the frame it shows, the row is cut again on return
     void TrimAnims(uint64_t now)
     {
-        if (g_anims.size() <= kAnimCache) return;
-        std::vector<std::pair<uint64_t, int>> age;
-        for (const auto& kv : g_anims) if (kv.second.seenMs + 2000 < now) age.push_back({ kv.second.seenMs, kv.first });
-        std::sort(age.begin(), age.end());
-        for (size_t i = 0; i < age.size() && g_anims.size() > kAnimCache; ++i)
+        for (auto it = g_anims.begin(); it != g_anims.end();)
         {
-            FreeAnim(g_anims[age[i].second]);
-            g_anims.erase(age[i].second);
+            Anim& a = it->second;
+            if (a.seenMs + kAnimKeepMs >= now) { ++it; continue; }
+            if (a.row >= 0 && size_t(a.row) < g_rows.size() && g_rows[size_t(a.row)] == it->first
+                && size_t(a.row) < g_rowState.size() && g_rowState[size_t(a.row)] == 1) g_rowState[size_t(a.row)] = 0;
+            FreeAnim(a);
+            it = g_anims.erase(it);
         }
     }
 
@@ -2779,6 +3195,8 @@ namespace
         const ModToolsUiApi* ui = rp::host->ui;
         g_rows = rows;
         g_rowState.assign(g_rows.size(), 0);
+        g_tiledRows.clear();
+        for (auto& kv : g_anims) kv.second.row = -1;
         ui->ListClear(g_grid);
         for (size_t i = 0; i < g_rows.size(); ++i)
         {
@@ -3041,6 +3459,8 @@ namespace
         const std::vector<int> rows = VisibleRows();
         g_onScreen = rows;
         const uint64_t now = GetTickCount64(), until = NowUs() + 12000;
+        const int first = rows.empty() ? -1 : rows.front();
+        if (first != g_lastFirstRow) { if (g_lastFirstRow >= 0) g_lastScrollMs = now; g_lastFirstRow = first; }
         bool more = false;
         size_t inserted = 0;
         for (int r : rows)
@@ -3050,21 +3470,31 @@ namespace
             const auto it = g_anims.find(idx);
             if (it != g_anims.end()) it->second.seenMs = now;
             if (g_rowState[size_t(r)]) continue;
+            if (NowUs() > until) { more = true; continue; }
             const Entry& e = g_all[size_t(idx)];
             if (ThumbCurrent(e))
             {
-                if (it == g_anims.end() && NowUs() > until) { more = true; continue; }
-                SetRowIcon(r, e);
-                g_rowState[size_t(r)] = 1;
+                if (it != g_anims.end() && !it->second.icons.empty()) { SetRowIcon(r, e); g_rowState[size_t(r)] = 1; continue; }
+                CutLater(idx, r);                   // the icons arrive from the cutter, CollectCuts sets the row
+                g_rowState[size_t(r)] = 3;
                 continue;
             }
             g_rowState[size_t(r)] = 2;
             if (std::find(g_failed.begin(), g_failed.end(), idx) != g_failed.end()) { SetRowIcon(r, e, true); g_rowState[size_t(r)] = 1; continue; }
+            if (it == g_anims.end() && FileExists(ThumbPath(e))) CutLater(idx, r);      // the old tile shows while its remake waits in the queue
             if (std::find(g_queue.begin(), g_queue.end(), idx) != g_queue.end()) continue;
             g_queue.insert(g_queue.begin() + inserted++, idx);
             ++g_queueTotal;
         }
         TrimAnims(now);
+        // tiles far from the view go: the grid holds 20000 rows, a tile is a pixmap of the icon size
+        if (!rows.empty() && !g_tiledRows.empty())
+        {
+            const int margin = std::max(60, int(rows.size()) * kKeepScreens), lo = rows.front() - margin, hi = rows.back() + margin;
+            std::vector<int> gone;
+            for (int r : g_tiledRows) if (r < lo || r > hi) gone.push_back(r);
+            for (int r : gone) DropRowTile(r);
+        }
         return more;
     }
 
@@ -3078,6 +3508,21 @@ namespace
 
     // makes a few queued thumbnails, within `budgetMs`, and refreshes the rows on show
     bool g_paceThumbs = true;           // "fxpreview dbg pace 0|1"
+    // The queue's hidden frames draw the whole map, so they wait while the user works: a camera move, a mouse button held or
+    // a grid scroll in the last kBusyMs. Radiant redraws the camera view all the time, so frames alone say nothing.
+    bool g_idleOnly = true;             // "fxpreview dbg idleonly 0|1"
+    const uint64_t kBusyMs = 400;
+    bool UserBusy(uint64_t now)
+    {
+        float o[3] = {}, a[3] = {};
+        if (rp::host->GetCamera && rp::host->GetCamera(rp::self, o, a))
+        {
+            if (memcmp(o, g_lastCam, sizeof o) != 0 || memcmp(a, g_lastCam + 3, sizeof a) != 0) { memcpy(g_lastCam, o, sizeof o); memcpy(g_lastCam + 3, a, sizeof a); g_lastCamMoveMs = now; }
+        }
+        if ((GetAsyncKeyState(VK_LBUTTON) | GetAsyncKeyState(VK_RBUTTON) | GetAsyncKeyState(VK_MBUTTON)) & 0x8000) g_lastInputMs = now;
+        const uint64_t last = std::max(g_lastCamMoveMs, std::max(g_lastInputMs, g_lastScrollMs));
+        return last != 0 && now - last < kBusyMs;
+    }
     uint64_t g_lastWorkUs = 0;          // the end of the last job slice (NowUs)
     uint64_t g_idleGapUs = 3000;        // "fxpreview dbg idlegap <ms>"
     void FinishThumb(int idx, bool ok, const std::string& why)
@@ -3085,7 +3530,14 @@ namespace
         const Entry& e = g_all[size_t(idx)];
         if (!ok) { g_failed.push_back(idx); if (!why.empty()) rp::Log("fxpreview: thumbnail of %s failed: %s", FullName(e).c_str(), why.c_str()); }
         ++g_queueDone;
-        for (size_t r = 0; r < g_rows.size(); ++r) if (g_rows[r] == idx) { SetRowIcon(int(r), e, !ok, true, ok && !g_doneStrip.empty() ? &g_doneStrip : nullptr); if (r < g_rowState.size()) g_rowState[r] = 1; break; }
+        g_cutting.erase(idx);           // a cut of the old file still on the worker is dropped
+        const int r = RowOf(idx);
+        if (r >= 0 && size_t(r) < g_rowState.size())
+        {
+            if (!ok) { SetRowIcon(r, e, true); g_rowState[size_t(r)] = 1; }
+            else if (!g_doneStrip.empty()) { CutLater(idx, r, std::move(g_doneStrip)); g_rowState[size_t(r)] = 3; }    // the item keeps its old tile until the cut lands
+            else { SetRowIcon(r, e, false, true); g_rowState[size_t(r)] = 1; }
+        }
         g_doneStrip.clear();
     }
     // a slice of the current strip, the next queued effect begun when none runs
@@ -3280,7 +3732,7 @@ namespace
             Anim& a = it->second;
             alignas(16) char scaled[64], pix[64];
             IconBuf icon;
-            qt.imageScaled(a.poster, scaled, n, n, 1 /* KeepAspectRatio */, 0 /* Fast */);
+            qt.imageScaled(a.poster.b, scaled, n, n, 1 /* KeepAspectRatio */, 0 /* Fast */);
             qt.pixmapFromImage(pix, scaled, 0);
             qt.iconFromPixmap(icon.b, pix);
             qt.pixmapDtor(pix);
@@ -3642,6 +4094,10 @@ namespace
             && Get(qt.imageFromFile, g, "??0QImage@@QEAA@AEBVQString@@PEBD@Z")
             && Get(qt.imageWidth, g, "?width@QImage@@QEBAHXZ")
             && Get(qt.imageHeight, g, "?height@QImage@@QEBAHXZ")
+            && (Get(qt.imageBits, g, "?bits@QImage@@QEAAPEAEXZ") || true)
+            && (Get(qt.imageBytesPerLine, g, "?bytesPerLine@QImage@@QEBAHXZ") || true)
+            && (Get(qt.iconCtor, g, "??0QIcon@@QEAA@XZ") || true)
+            && (Get(qt.scrollToItem, w, "?scrollToItem@QListWidget@@QEAAXPEBVQListWidgetItem@@W4ScrollHint@QAbstractItemView@@@Z") || true)
             && Get(qt.stringCtor, c, "??0QString@@QEAA@PEBD@Z")
             && Get(qt.stringDtor, c, "??1QString@@QEAA@XZ");
     }
@@ -3731,11 +4187,12 @@ namespace
     }
 
     void ApplyLegacy();
-    void OnLegacyBox(void*, int v)
+    // the Previews (Experimental) box: ticked = our thumbnails and preview box, unticked = Radiant's own browser
+    void OnPreviewsBox(void*, int v)
     {
-        g_legacy = v != 0;
-        rp::host->ConfigSet(rp::self, "fxpreview", "legacy", g_legacy ? "1" : "0");
-        for (void* box : { g_legacyBox, g_legacyBox2 }) if (box) rp::host->ui->SetChecked(box, g_legacy ? 1 : 0);
+        g_legacy = v == 0;
+        rp::host->ConfigSet(rp::self, "fxpreview", "previews", g_legacy ? "0" : "1");
+        for (void* box : { g_legacyBox, g_legacyBox2 }) if (box) rp::host->ui->SetChecked(box, g_legacy ? 0 : 1);
         ApplyLegacy();
     }
 
@@ -3819,9 +4276,9 @@ namespace
         ui->BoxAddWidget(rcol, g_slider, 0);
         ui->SetLayout(right, rcol);
         row = ui->HBox();
-        g_legacyBox2 = ui->CheckBox("Legacy", left);
-        ui->SetChecked(g_legacyBox2, g_legacy ? 1 : 0);
-        ui->SetToolTip(g_legacyBox2, "Radiant's own FX Browser in place of the thumbnails and the preview box");
+        g_legacyBox2 = ui->CheckBox("Previews (Experimental)", left);
+        ui->SetChecked(g_legacyBox2, g_legacy ? 0 : 1);
+        ui->SetToolTip(g_legacyBox2, "Every effect as a playing thumbnail with a preview box, unticked shows Radiant's own FX Browser");
         ui->BoxAddWidget(row, g_legacyBox2, 0);
         void* gap = ui->Widget(left);
         ui->SetMinimumSize(gap, 16, 0);
@@ -3849,7 +4306,7 @@ namespace
         rp::host->OnClicked(rp::self, restart, OnRestart, nullptr);
         rp::host->OnClicked(rp::self, stop, OnStop, nullptr);
         rp::host->OnChanged(rp::self, g_loopBox, OnLoopBox, nullptr);
-        rp::host->OnChanged(rp::self, g_legacyBox2, OnLegacyBox, nullptr);
+        rp::host->OnChanged(rp::self, g_legacyBox2, OnPreviewsBox, nullptr);
         rp::host->OnChanged(rp::self, g_iconSlider, OnIconSlider, nullptr);
         rp::host->OnChanged(rp::self, g_scopeAll, OnScope, reinterpret_cast<void*>(intptr_t(0)));
         rp::host->OnChanged(rp::self, g_scopeUse, OnScope, reinterpret_cast<void*>(intptr_t(1)));
@@ -3886,16 +4343,16 @@ namespace
         g_bar = ui->Widget(nullptr);
         void* barRow = ui->HBox();
         ui->LayoutMargins(barRow, 4, 0, 4, 2);
-        g_legacyBox = ui->CheckBox("Legacy", g_bar);
-        ui->SetChecked(g_legacyBox, g_legacy ? 1 : 0);
-        ui->SetToolTip(g_legacyBox, "Radiant's own FX Browser in place of the thumbnails and the preview box");
+        g_legacyBox = ui->CheckBox("Previews (Experimental)", g_bar);
+        ui->SetChecked(g_legacyBox, g_legacy ? 0 : 1);
+        ui->SetToolTip(g_legacyBox, "Every effect as a playing thumbnail with a preview box, unticked shows Radiant's own FX Browser");
         ui->BoxAddWidget(barRow, g_legacyBox, 0);
         ui->BoxAddStretch(barRow, 1);
         ui->SetLayout(g_bar, barRow);
-        rp::host->OnChanged(rp::self, g_legacyBox, OnLegacyBox, nullptr);
+        rp::host->OnChanged(rp::self, g_legacyBox, OnPreviewsBox, nullptr);
     }
 
-    // true while the thumbnails and the box are on screen (the FX Browser open, its tab in front, Legacy off)
+    // true while the thumbnails and the box are on screen (the FX Browser open, its tab in front, Previews ticked)
     bool Shown()
     {
         if (!g_host || !g_root || g_legacy || !qt.visibleRegion || !qt.regionIsEmpty || !qt.regionDtor) return false;
@@ -3910,9 +4367,9 @@ namespace
         if (!g_host) return;
         const ModToolsUiApi* ui = rp::host->ui;
         if (g_legacy) Stop();
-        else SyncFavs();                                // Legacy may have changed Radiant's favorites
+        else SyncFavs();                                // Radiant's own browser may have changed its favorites
         ui->SetVisible(g_root, g_legacy ? 0 : 1);
-        ui->SetVisible(g_bar, g_legacy ? 1 : 0);        // our window has its own Legacy box in the toggle row
+        ui->SetVisible(g_bar, g_legacy ? 1 : 0);        // our window has its own Previews box in the toggle row
         if (g_stock) ui->SetVisible(g_stock, g_legacy ? 1 : 0);
     }
     // puts the bar and the window into the FX Browser pane once Radiant made it
@@ -3955,12 +4412,13 @@ namespace
     std::string Status()
     {
         char buf[1200];
-        snprintf(buf, sizeof buf, "fxpreview: %s, effect '%s' handle %u elapsed %.2f of %.2f s, paused %d, fx rendering %d, mgr %s, fx time %d ms, %zu effects, grid %zu rows, queue %zu, loop %d, play all %d, box frames %u shown %u empty %u (draw %.2f ms, show %.2f ms) %.1f fps of %u, async %d, misses %u, box %dx%d, orbit %.1f %.1f x%.2f, tanV %.4f (fov %.4f), fit %d %.3f %.3f %.3f cam %.0f %.0f %.0f judge %.0f, grid %d, scope %d fav %d (%zu), held %ld, icon calls %u skipped %u, readbacks dropped %u, exposure guard %d, fixed ev %.2f, fx slots %d of 4096, exposure %.3f %.4f %.3f, animate %d, strips cut %zu, on screen %zu, strips made %u (last %.1f ms, longest slice %.1f ms, refilmed %u), per strip %.1f ms work %.1f ms wall %.1f slices (%llu strips), last batch %u in %.0f ms, icons cut %u (%.2f ms each), live size steps %u (%.2f ms each)\n",
+        snprintf(buf, sizeof buf, "fxpreview: %s, effect '%s' handle %u elapsed %.2f of %.2f s, paused %d, fx rendering %d, mgr %s, fx time %d ms, %zu effects, grid %zu rows, queue %zu, loop %d, play all %d, box frames %u shown %u empty %u (draw %.2f ms, show %.2f ms) %.1f fps of %u, async %d, misses %u, box %dx%d, orbit %.1f %.1f x%.2f, tanV %.4f (fov %.4f), fit %d %.3f %.3f %.3f cam %.0f %.0f %.0f judge %.0f, grid %d, scope %d fav %d (%zu), held %ld, icon calls %u skipped %u, readbacks dropped %u, exposure guard %d, fixed ev %.2f, fx slots %d of 4096, exposure %.3f %.4f %.3f, animate %d, strips cut %zu, on screen %zu, strips made %u (last %.1f ms, longest slice %.1f ms at %d, refilmed %u), per strip %.1f ms work %.1f ms wall %.1f slices (%llu strips), last batch %u in %.0f ms, icons cut %u (%.2f ms each), worker cuts %u (%.2f ms each) %zu pending, tiles held %zu, live size steps %u (%.2f ms each), idle only %d busy %d (cam %llu input %llu scroll %llu ms ago)\n",
                  !g_enabled ? "off ([fxpreview] enabled=0)" : g_ready ? "ready" : "unavailable", g_name.c_str(), g_effect, ElapsedSeconds(), g_lengthMs / 1000.0,
                  g_boxPaused ? 1 : 0, FxRenderingOn() ? 1 : 0, PlaybackMgr() ? "found" : "missing", FxTimeMs(), g_all.size(), g_rows.size(), g_queue.size(),
                  g_loop ? 1 : 0, g_animate ? 1 : 0, g_boxFrames, g_boxShown, g_emptyFrames, g_boxFrames ? double(g_boxUs) / 1000.0 / g_boxFrames : 0.0, g_boxShown ? double(g_showUs) / 1000.0 / g_boxShown : 0.0, g_fpsNow, g_boxFps, g_asyncBox ? 1 : 0, g_boxMisses, g_box && g_qtOk ? qt.widgetWidth(g_box) : -1, g_box && g_qtOk ? qt.widgetHeight(g_box) : -1, g_orbitYaw, g_orbitPitch, g_orbitZoom, g_tanV, g_tanFov, FitOf(g_name) ? int(FitOf(g_name)->ok) : -1, FitOf(g_name) ? FitOf(g_name)->cx : 0.0f, FitOf(g_name) ? FitOf(g_name)->cy : 0.0f, FitOf(g_name) ? FitOf(g_name)->size : 0.0f, g_boxCam[0], g_boxCam[1], g_boxCam[2], g_judgeDist, g_showGrid ? 1 : 0, g_scope, g_favOnly ? 1 : 0, g_favs.size(), g_heldUpdates, g_iconCalls, g_iconSkips, g_readbacksDropped, g_exposureGuard ? 1 : 0, g_fixedEv, LiveEffects(), CamWnd() ? reinterpret_cast<const float*>(CamWnd() + off_Cam_Exposure)[0] : 0.0f, CamWnd() ? reinterpret_cast<const float*>(CamWnd() + off_Cam_Exposure)[1] : 0.0f, CamWnd() ? reinterpret_cast<const float*>(CamWnd() + off_Cam_Exposure)[2] : 0.0f,
-                 g_animate ? 1 : 0, g_anims.size(), g_onScreen.size(), g_strips, g_stripUs / 1000.0, g_sliceMaxUs / 1000.0, g_refilms,
-                 g_sumStrips ? double(g_sumWorkUs) / 1000.0 / g_sumStrips : 0.0, g_sumStrips ? double(g_sumWallMs) / g_sumStrips : 0.0, g_sumStrips ? double(g_sumSlices) / g_sumStrips : 0.0, (unsigned long long)g_sumStrips, g_batchStrips, g_batchUs / 1000.0, g_loads, g_loads ? g_loadUs / 1000.0 / g_loads : 0.0, g_lives, g_lives ? g_liveUs / 1000.0 / g_lives : 0.0);
+                 g_animate ? 1 : 0, g_anims.size(), g_onScreen.size(), g_strips, g_stripUs / 1000.0, g_sliceMaxUs / 1000.0, g_sliceMaxAt, g_refilms,
+                 g_sumStrips ? double(g_sumWorkUs) / 1000.0 / g_sumStrips : 0.0, g_sumStrips ? double(g_sumWallMs) / g_sumStrips : 0.0, g_sumStrips ? double(g_sumSlices) / g_sumStrips : 0.0, (unsigned long long)g_sumStrips, g_batchStrips, g_batchUs / 1000.0, g_loads, g_loads ? g_loadUs / 1000.0 / g_loads : 0.0, g_cuts, g_cuts ? g_cutUs / 1000.0 / g_cuts : 0.0, g_cutting.size(), g_tiledRows.size(), g_lives, g_lives ? g_liveUs / 1000.0 / g_lives : 0.0,
+                 g_idleOnly ? 1 : 0, UserBusy(GetTickCount64()) ? 1 : 0, (unsigned long long)(GetTickCount64() - g_lastCamMoveMs), (unsigned long long)(GetTickCount64() - g_lastInputMs), (unsigned long long)(GetTickCount64() - g_lastScrollMs));
         return buf;
     }
 }
@@ -3968,13 +4426,14 @@ namespace
 void Setup()
 {
     g_mainTid = GetCurrentThreadId();
-    g_enabled = rp::host->ConfigGetInt(rp::self, "fxpreview", "browser", 1) != 0;   // "enabled" is ignored: older installs carry enabled=0 for the retired FX window
-    if (!g_enabled) { rp::Log("fxpreview: off ([fxpreview] enabled=0)"); return; }
+    g_enabled = rp::host->ConfigGetInt(rp::self, "fxpreview", "browser", 1) != 0;   // "enabled" is ignored.
+    if (!g_enabled) { rp::Log("fxpreview: off ([fxpreview] browser=0)"); return; }
     const int fps = rp::host->ConfigGetInt(rp::self, "fxpreview", "box_fps", 30);
+    g_lightRange = float(std::max(0, rp::host->ConfigGetInt(rp::self, "fx", "light_range", 0)));
     g_boxFps = unsigned(fps < 5 ? 5 : fps > 60 ? 60 : fps);
     const int icon = rp::host->ConfigGetInt(rp::self, "fxpreview", "icon_size", 128);
     g_iconSize = std::max(kIconMin, std::min(kIconMax, icon));
-    g_legacy = rp::host->ConfigGetInt(rp::self, "fxpreview", "legacy", 0) != 0;
+    g_legacy = rp::host->ConfigGetInt(rp::self, "fxpreview", "previews", 0) == 0;   // "legacy" is ignored
     g_showGrid = rp::host->ConfigGetInt(rp::self, "fxpreview", "grid", 1) != 0;
     g_animate = rp::host->ConfigGetInt(rp::self, "fxpreview", "animate", 1) != 0;
     g_loop = rp::host->ConfigGetInt(rp::self, "fxpreview", "loop", 1) != 0;
@@ -4029,6 +4488,14 @@ void Setup()
         if (!rp::host->Detour || !rp::host->Detour(rp::self, lists, reinterpret_cast<void*>(&hk_DebugLists), reinterpret_cast<void**>(&g_origDebugLists))) g_origDebugLists = nullptr;
     if (void* lines = At<void*>(kCachedLines))
         if (!rp::host->Detour || !rp::host->Detour(rp::self, lines, reinterpret_cast<void*>(&hk_CachedLines), reinterpret_cast<void**>(&g_origCachedLines))) g_origCachedLines = nullptr;
+    if (void* outdoor = At<void*>(kOutdoorUpdate))
+        if (!rp::host->Detour || !rp::host->Detour(rp::self, outdoor, reinterpret_cast<void*>(&hk_OutdoorUpdate), reinterpret_cast<void**>(&g_origOutdoorUpdate))) g_origOutdoorUpdate = nullptr;
+    if (void* fb = At<void*>(kFxDrawBegin))
+        if (!rp::host->Detour || !rp::host->Detour(rp::self, fb, reinterpret_cast<void*>(&hk_FxBegin), reinterpret_cast<void**>(&g_origFxBegin))) g_origFxBegin = nullptr;
+    if (void* fe = At<void*>(kFxDrawEnd))
+        if (!rp::host->Detour || !rp::host->Detour(rp::self, fe, reinterpret_cast<void*>(&hk_FxEnd), reinterpret_cast<void**>(&g_origFxEnd))) g_origFxEnd = nullptr;
+    if (void* ls = At<void*>(kLightStateUpdate))
+        if (!rp::host->Detour || !rp::host->Detour(rp::self, ls, reinterpret_cast<void*>(&hk_LightStateUpdate), reinterpret_cast<void**>(&g_origLightStateUpdate))) g_origLightStateUpdate = nullptr;
     rt.brushCacheUpd = At<VoidFn>(kBrushCacheUpd);
     rt.poolA        = At<VoidFn>(kPoolA);
     rt.poolB        = At<VoidFn>(kPoolB);
@@ -4093,11 +4560,12 @@ void Tick()
     if (visible)
     {
         BoxTick(now);
+        CollectCuts();
         if (now >= g_nextVisibleMs) g_nextVisibleMs = now + (RefreshVisible() ? 15 : 200);
         AnimateGrid(now);
         // one slice after each of the user's frames (hidden frames back to back shift the user's next frame), back to back
         // with a short gap for Qt's events while the view is idle
-        if (!g_queue.empty() || g_job.active)
+        if ((!g_queue.empty() || g_job.active) && !(g_idleOnly && g_paceThumbs && UserBusy(now)))
         {
             const uint64_t us = NowUs(), gap = us - g_lastUserUs > 250000 ? g_idleGapUs : 33000;
             if (!g_paceThumbs || g_hiddenSince == 0 || us - g_lastWorkUs > gap) { WorkQueue(g_paceThumbs ? g_jobSliceUs : 80000); g_lastWorkUs = NowUs(); }
@@ -4157,7 +4625,7 @@ void Shutdown()
     ReleaseSlots();
     ReleaseStrip();
     StopSaver();
-    if (g_qtOk) { FreeAnims(); Detach(); }
+    if (g_qtOk) { StopCutter(); FreeAnims(); FreeAnim(g_placeholder); Detach(); }
     if (g_wheelHook) { UnhookWindowsHookEx(g_wheelHook); g_wheelHook = nullptr; }
 }
 
@@ -4195,10 +4663,10 @@ bool Command(const std::string& command, std::string& reply)
     if (arg.empty() || arg == "status") { reply = Status(); return true; }
     if (!g_ready) { reply = Status(); return true; }
     if (arg == "stop") { Stop(); reply = "fxpreview: stopped\n"; return true; }
-    if (arg == "legacy 0" || arg == "legacy 1")
+    if (arg == "previews 0" || arg == "previews 1" || arg == "legacy 0" || arg == "legacy 1")
     {
-        OnLegacyBox(nullptr, arg.back() == '1');
-        reply = std::string("fxpreview: legacy ") + (g_legacy ? "on" : "off") + (g_host ? ", in the FX Browser" : ", FX Browser not found yet") + (Shown() ? ", shown" : "") + "\n";
+        OnPreviewsBox(nullptr, arg[0] == 'p' ? arg.back() == '1' : arg.back() == '0');
+        reply = std::string("fxpreview: previews ") + (g_legacy ? "off" : "on") + (g_host ? ", in the FX Browser" : ", FX Browser not found yet") + (Shown() ? ", shown" : "") + "\n";
         return true;
     }
     if (arg == "dbg view")       // the fx step's view parameters with the user's camera and with the stage camera
@@ -4292,7 +4760,7 @@ bool Command(const std::string& command, std::string& reply)
                 StepFx(0.0);
                 for (int age : ages)
                 {
-                    unsigned e = rt.spawn(def, kStage, axis, -age, 1.0f);
+                    unsigned e = SpawnUnculled(def, kStage, axis, -age);
                     if (!e) { reply += " refused"; break; }
                     StepFx(0.001);
                     std::vector<unsigned char> px; int w = 0, h = 0;
@@ -4326,15 +4794,44 @@ bool Command(const std::string& command, std::string& reply)
             return true;
         }
         if (arg.find("gameview") != std::string::npos) g_dbgNoGameView = arg.back() == '0';
+        if (arg.compare(4, 10, "stagelock ") == 0) g_dbgNoSunLock = arg.back() == '0';
+        if (arg == "dbg stopall" && g_origStopAll) { g_origStopAll(nullptr, nullptr); reply = "fxpreview: FX playback stop-all called\n"; return true; }     // the real function takes no arguments
+        if (arg == "dbg retrigger") { if (char* m = PlaybackMgr()) At<void (*)(char*, char, char)>(0x1404736E0)(m, 0, 0); reply = "fxpreview: map effects retriggered\n"; return true; }
+        if (arg.compare(4, 11, "lightstate ") == 0) g_keepLightState = arg.back() == '1';
+        if (arg.compare(4, 8, "keepmap ") == 0) g_keepIconMap = arg.back() == '1';
+        if (arg.compare(4, 7, "scroll ") == 0 && qt.scrollToItem && g_grid)      // "dbg scroll <row>": that row at the top (tests)
+        {
+            const int r = atoi(arg.c_str() + 11);
+            if (void* item = qt.item(g_grid, std::max(0, std::min(int(g_rows.size()) - 1, r)))) qt.scrollToItem(g_grid, item, 1 /* PositionAtTop */);
+            reply = "fxpreview: scrolled to row " + std::to_string(r) + "\n";
+            return true;
+        }
+        if (arg.compare(4, 11, "lightrange ") == 0) g_lightRange = float(std::max(0, atoi(arg.c_str() + 15)));
+        if (arg.compare(4, 9, "lockbyte ") == 0) { if (char* lock = At<char*>(kLockSunVolume)) *lock = arg.back() == '1'; }
         if (arg.find("cull") != std::string::npos) g_noCull = arg.back() == '0';
         if (arg == "dbg stripes") g_fakeStripes = true;
         if (arg == "dbg forgetfits") g_fits.clear();
         if (arg.compare(4, 8, "mapdraw ") == 0) g_skipMapDraws = arg.back() == '0';
+        if (arg.compare(4, 6, "mapfx ") == 0) g_skipMapFx = arg.back() == '0';
+        if (arg.compare(4, 8, "outdoor ") == 0) g_skipOutdoor = arg.back() == '0';
+        if (arg.compare(4, 10, "maplights ") == 0) g_lightCull = arg.back() == '0';
+        if (arg.compare(4, 7, "nodraw ") == 0) g_dbgNoDraw = arg.back() == '1';
+        if (arg.compare(4, 5, "ropt ") == 0)      // "dbg ropt <index> <0|1>": a View > Render Flags option by its index
+        {
+            int idx = -1, on = 0;
+            typedef void (*SetOptFn)(int, char);
+            if (sscanf(arg.c_str() + 9, "%d %d", &idx, &on) == 2 && idx >= 0 && idx < 75 && At<SetOptFn>(kSetRenderOption))
+                At<SetOptFn>(kSetRenderOption)(idx, char(on));
+            reply = "fxpreview: ropt " + std::to_string(idx) + " = " + std::to_string(rt.renderOption ? int(rt.renderOption(idx)) : -1) + "\n";
+            return true;
+        }
+        if (arg.compare(4, 9, "noupkeep ") == 0) g_dbgNoUpkeep = arg.back() == '1';
         if (arg.compare(4, 10, "gpushrink ") == 0) g_gpuShrink = arg.back() == '1';
         if (arg.compare(4, 8, "idlegap ") == 0) g_idleGapUs = uint64_t(std::max(0, atoi(arg.c_str() + 12))) * 1000;
         if (arg.compare(4, 6, "slice ") == 0) g_jobSliceUs = uint64_t(std::max(1, atoi(arg.c_str() + 10))) * 1000;
         if (arg.compare(4, 5, "expo ") == 0) g_expoTraceLeft = atoi(arg.c_str() + 9);
         if (arg.compare(4, 5, "pace ") == 0) g_paceThumbs = arg.back() == '1';
+        if (arg.compare(4, 9, "idleonly ") == 0) g_idleOnly = arg.back() == '1';
         if (arg.compare(4, 8, "discard ") == 0) g_discardAfter = atoi(arg.c_str() + 12);
         if (arg.find("exposure") != std::string::npos) g_exposureGuard = arg.back() == '1';
         if (arg.compare(4, 8, "lastbox ") == 0 || arg.compare(4, 6, "frame ") == 0 || arg.compare(4, 6, "shown ") == 0)
@@ -4378,7 +4875,7 @@ bool Command(const std::string& command, std::string& reply)
             reply += "fxpreview: " + std::to_string(w) + "x" + std::to_string(h) + (ok ? " saved " : " not saved ") + out + "\n";
             return true;
         }
-        if (arg == "dbg resetstats") { g_boxFrames = g_boxShown = g_emptyFrames = g_boxMisses = 0; g_boxUs = g_showUs = 0; g_sliceMaxUs = 0; g_sumWorkUs = g_sumWallMs = g_sumSlices = g_sumStrips = 0; g_loadUs = 0; g_loads = 0; g_liveUs = 0; g_lives = 0; }
+        if (arg == "dbg resetstats") { g_boxFrames = g_boxShown = g_emptyFrames = g_boxMisses = 0; g_boxUs = g_showUs = 0; g_sliceMaxUs = 0; g_sliceMaxAt = -1; g_sumWorkUs = g_sumWallMs = g_sumSlices = g_sumStrips = 0; g_loadUs = 0; g_loads = 0; g_liveUs = 0; g_lives = 0; }
         if (arg.compare(4, 5, "hold ") == 0) g_holdStage = atoi(arg.c_str() + 9);
         if (arg.compare(4, 4, "seq ") == 0) { g_seqLeft = atoi(arg.c_str() + 8); g_seq.clear(); }
         if (arg.compare(4, 8, "restore ") == 0) g_restoreSteps = atoi(arg.c_str() + 12);
@@ -4386,7 +4883,7 @@ bool Command(const std::string& command, std::string& reply)
         if (arg.compare(4, 8, "minstep ") == 0) g_minStepMs = atof(arg.c_str() + 12);
         if (arg.compare(4, 8, "droplog ") == 0) g_dropTraceLeft = atoi(arg.c_str() + 12);
         if (arg.compare(4, 6, "async ") == 0) { g_asyncBox = arg.back() == '1'; if (!g_asyncBox) { CollectBox(true); ReleaseSlots(); } }
-        reply = "fxpreview: game view switch " + std::string(g_dbgNoGameView ? "off" : "on") + ", spawn cull " + (g_noCull ? "off" : "on") + (g_origSetCamera ? "" : " (camera hook missing)") + "\n";
+        reply = "fxpreview: tiles neutralized " + std::to_string(g_neutralized) + ", light hook " + std::to_string(g_iconCalls) + " calls " + std::to_string(g_iconSkips) + " skipped, " + std::to_string(g_iconUs / 1000) + " ms total, max " + std::to_string(g_iconMaxUs / 1000) + " ms, built " + std::to_string(g_iconBuilt) + ", planes zero " + std::to_string(g_iconPlanesZero) + " restored " + std::to_string(g_iconRestored) + " user cam " + std::to_string(g_userCamInstalls) + (g_userCamValid ? " valid" : " unknown") + " sets " + std::to_string(g_userCamSets) + " restores " + std::to_string(g_userCamRestores) + " far " + std::to_string(g_iconFar) + " range " + std::to_string(int(g_lightRange)) + ", icon map swaps " + std::to_string(g_iconMapSwaps) + ", strip waits " + std::to_string(g_stripWaits) + ", fx begins " + std::to_string(g_fxBegins) + " (hidden " + std::to_string(g_fxBeginsHidden) + ") ends " + std::to_string(g_fxEnds) + BuildRingText() + ", fx camera planes " + std::to_string(FxSystem() ? *reinterpret_cast<const int*>(FxSystem() + off_Sys_PlaneCount) : -1) + ", game view switch " + std::string(g_dbgNoGameView ? "off" : "on") + ", spawn cull " + (g_noCull ? "off" : "on") + (g_origSetCamera ? "" : " (camera hook missing)") + ", hidden frames: map fx " + (g_skipMapFx ? "skipped" : "drawn") + ", map fx lights " + (g_lightCull ? "culled" : "all") + ", outdoor map " + (g_skipOutdoor ? "kept (" + std::to_string(g_outdoorSkips) + " skips)" : "updated") + (g_origOutdoorUpdate ? "" : " (outdoor hook missing)") + ", light state " + (g_keepLightState ? "user's (" + std::to_string(g_lightStateSwaps) + " swaps)" : "stage's") + (g_origLightStateUpdate ? "" : " (hook missing)") + "\n";
         return true;
     }
     if (arg == "pause") { TogglePause(); reply = Status(); return true; }
