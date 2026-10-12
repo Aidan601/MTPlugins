@@ -3968,7 +3968,7 @@ namespace
 void Setup()
 {
     g_mainTid = GetCurrentThreadId();
-    g_enabled = rp::host->ConfigGetInt(rp::self, "fxpreview", "enabled", 0) != 0;
+    g_enabled = rp::host->ConfigGetInt(rp::self, "fxpreview", "browser", 1) != 0;   // "enabled" is ignored: older installs carry enabled=0 for the retired FX window
     if (!g_enabled) { rp::Log("fxpreview: off ([fxpreview] enabled=0)"); return; }
     const int fps = rp::host->ConfigGetInt(rp::self, "fxpreview", "box_fps", 30);
     g_boxFps = unsigned(fps < 5 ? 5 : fps > 60 ? 60 : fps);
