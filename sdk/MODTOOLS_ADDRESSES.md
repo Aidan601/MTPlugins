@@ -356,7 +356,7 @@ generated from the addresses the host and the shipped plugins use: do not edit i
 | `0x146D31B88` | `ImpEnterCriticalSection` | Radiant's import slot for EnterCriticalSection |
 | `0x146D31BF0` | `ImpTryEnterCriticalSection` | TryEnterCriticalSection |
 
-## APE functions (46)
+## APE functions (48)
 
 | Address | Name | Prototype (x64) | Notes |
 | ------- | ---- | --------------- | ----- |
@@ -391,6 +391,8 @@ generated from the addresses the host and the shipped plugins use: do not edit i
 | `0x14021E2F0` | `Reorder` | `(indices, triangles, float weights[3], out, batch)` | called by the surface build |
 | `0x140270AA0` | `ReadSsi` | `(const char* ssi name, Ssi* out)` | one ssi record from gdt.db |
 | `0x140298180` | `Find` |  | the finder, called by the techset include loader only |
+| `0x1402A4FD0` | `Assert` | `(file, line, kind, expr, fmt, ...)` | nonzero = continue, callers int 3 on zero |
+| `0x1402B2940` | `Slerp` |  | quat slerp (from xyzw, to xyzw, frac, out), sanity checks the result (com_math.cpp:2314) |
 | `0x14031A530` | `EndsWith` |  | bool ends_with(const std::string* s, const std::string* suffix): memcmp of the tail |
 | `0x140338A60` | `ViewOf` | `(camera, view out, float fov)` | origin, axes, +48 tan of the half height, +52 of the half width |
 | `0x14047EA90` | `SetAnim` | `(holder, const std::string& anim name, int mode)` |  |

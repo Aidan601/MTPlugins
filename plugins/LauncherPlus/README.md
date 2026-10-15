@@ -9,7 +9,7 @@ Faster builds and a few improvements for the Black Ops III Mod Tools Launcher. T
 - Link with BetterBuild: faster links, and the localized and sound steps are skipped when their inputs did not change.
 - Light with BetterBuild: faster light bakes, and Low and Medium come out closer to High.
 - Draft in the Light quality box, in front of Low: a fast bake for quick checks.
-- Better auto LODs: the linker reduces models with meshoptimizer, much faster than the stock simplifier and with fewer broken LODs. Radiant+ and APE+ preview the same LODs.
+- Better auto LODs (off by default, `meshopt_lods=1` under `[linker]` in LauncherPlus.ini turns them on): the linker reduces models with meshoptimizer, much faster than the stock simplifier and with fewer broken LODs. Radiant+ and APE+ preview the same LODs.
 - Models over the stock 220,000-face limit get auto LODs too, as long as they fit in memory.
 - An auto LOD with broken (zero or NaN) normals is repaired instead of failing the link with "Produced invalid normal".
 - Each of the three can be switched off in the Launcher+ menu; the stock tool then runs as before. A build already running keeps the setting it started with.

@@ -136,6 +136,14 @@ namespace
         WaitForSingleObject(child.hProcess, INFINITE);
         DWORD exitCode = 1;
         GetExitCodeProcess(child.hProcess, &exitCode);
+        if ((exitCode & 0xF0000000) == 0xC0000000 || (exitCode & 0xF0000000) == 0xE0000000)
+        {
+            char line[200];
+            // 0xE06D7363 is an unhandled C++ exception; in a bake that is bad_alloc from a worker
+            snprintf(line, sizeof line, "Radiant died during the bake (code 0x%08lX).%s", exitCode,
+                     exitCode == 0xE06D7363 ? " That is usually the machine running out of memory: close other tools and bake again." : "");
+            Say(line);
+        }
         CloseHandle(child.hProcess);
         CloseHandle(job);
         return (int)exitCode;

@@ -73,8 +73,8 @@ namespace
         { kSkipTelemetry, "skip_telemetry" }, { kUmbraPoll, "umbra_poll" }, { kReuseD3DDevice, "reuse_d3d_device" },
         { kParallelMip, "parallel_mip" }, { kReuseWic, "reuse_wic" }, { kPrefetchFiles, "prefetch_files" },
         { kFastStat, "fast_stat" }, { kFastRecenter, "fast_recenter" }, { kSkipLocalized, "skip_localized" },
-        { kSkipSound, "skip_sound_convert" }, { kRaiseAutoLod, "raise_autolod_limit" },
-        { kRepairNormals, "repair_autolod_normals" }, { kMeshoptLod, "meshopt_autolod" },
+        { kSkipSound, "skip_sound_convert" }, { kRaiseAutoLod, "autolod_fixes (face limit)" },
+        { kRepairNormals, "autolod_fixes (normals)" }, { kMeshoptLod, "meshopt_lods" },
     };
     unsigned g_failed = 0;   // requested code patches whose bytes did not match
 
@@ -804,8 +804,8 @@ namespace
         return MH_CreateHook(at, reinterpret_cast<LPVOID>(&HookRecenter), reinterpret_cast<LPVOID*>(&g_recenter)) == MH_OK && MH_EnableHook(at) == MH_OK;
     }
 
-    // Auto LOD reducer (linker+0x76B800). raise_autolod_limit: past stock's 220,000 faces while the memory estimate fits
-    // a shared budget. repair_autolod_normals: zero or NaN normals rebuilt instead of failing the LOD.
+    // Auto LOD reducer (linker+0x76B800). autolod_fixes, face limit: past stock's 220,000 faces while the memory estimate fits
+    // a shared budget. Normals: zero or NaN normals rebuilt instead of failing the LOD.
     constexpr uintptr_t kAutoLodRva = 0x76B800, kAutoLodFaceCapRva = 0x76B91E, kAutoLodNormalCheckRva = 0x76C122, kSimplifyRva = 0x7AE170;
     const unsigned char kSimplifySignature[] = { 0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57, 0x48, 0x83, 0xEC, 0x40 };
     const unsigned char kAutoLodSignature[] = { 0x48, 0x8B, 0xC4, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57 };

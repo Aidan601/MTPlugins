@@ -1,9 +1,10 @@
 ; MTPlugins installer (Inno Setup 6), built by installer\build_installer.bat from build\Release.
 ; Installs d3d9.dll + RadiantLoader.ini and plugins\ (host, one folder per plugin, uninstall\) into <game>\bin.
-; Settings files (*.ini) are installed only when missing, so an update keeps the user's settings.
+; Settings files (*.ini) are installed only when missing, so an update keeps the user's settings and adds only missing keys.
+; The launcher's update runs it as /SILENT /RELAUNCH=1: previous folder, plugins and tasks, then the launcher again.
 
 #ifndef AppVersion
-  #define AppVersion "1.1.1"
+  #define AppVersion "1.1.2"
 #endif
 #define Bin "..\build\Release"
 #if FileExists(AddBackslash(SourcePath) + "..\LICENSE")
@@ -133,6 +134,17 @@ Source: "{#Bin}\plugins\PlayTest\BO3LiveBridge.dll"; DestDir: "{app}\bin\plugins
 Source: "..\plugins\PlayTest\PlayTest.ini"; DestDir: "{app}\bin\plugins\PlayTest"; Components: playtest; Flags: onlyifdoesntexist; Check: Wanted('PlayTest')
 Source: "..\plugins\PlayTest\README.md"; DestDir: "{app}\bin\plugins\PlayTest"; Components: playtest; Flags: ignoreversion; Check: Wanted('PlayTest')
 Source: "..\plugins\PlayTest\defender_playtest.ps1"; DestDir: "{app}\bin\plugins\PlayTest"; Components: playtest; Flags: ignoreversion; Check: Wanted('PlayTest')
+; ini templates for AddMissingKeys
+Source: "..\dist_template\RadiantPlugins.ini"; DestName: "template-RadiantPlugins.ini"; Flags: dontcopy
+Source: "..\plugins\TeamCreate\TeamCreate.ini"; DestName: "template-TeamCreate.ini"; Flags: dontcopy
+Source: "..\plugins\RadiantPlus\RadiantPlus.ini"; DestName: "template-RadiantPlus.ini"; Flags: dontcopy
+Source: "..\plugins\APEPlus\APEPlus.ini"; DestName: "template-APEPlus.ini"; Flags: dontcopy
+Source: "..\plugins\LauncherPlus\LauncherPlus.ini"; DestName: "template-LauncherPlus.ini"; Flags: dontcopy
+Source: "..\plugins\PlayTest\PlayTest.ini"; DestName: "template-PlayTest.ini"; Flags: dontcopy
+
+[Run]
+; the launcher's silent update opens the launcher again, not elevated
+Filename: "{app}\bin\modlauncher.exe"; WorkingDir: "{app}\bin"; Flags: nowait postinstall skipifnotsilent runasoriginaluser; Check: Relaunch
 
 [INI]
 ; the loader loads the installed host
@@ -256,6 +268,11 @@ begin
   Result := Adding('RadiantPlus') or Adding('APEPlus') or Adding('LauncherPlus');
 end;
 
+function Relaunch(): Boolean;
+begin
+  Result := (ExpandConstant('{param:RELAUNCH|0}') = '1') and FileExists(ExpandConstant('{app}\bin\modlauncher.exe'));
+end;
+
 function KeepSetup(): Boolean;
 begin
   Result := FullRun and (CompareText(ExpandConstant('{srcexe}'), ExpandConstant('{app}\bin\plugins\uninstall\MTPlugins-Setup.exe')) <> 0);
@@ -339,6 +356,42 @@ begin
     Result := -2;
 end;
 
+{ Keys of the shipped template that the installed ini lacks are added with the template's value, existing keys stay }
+procedure AddMissingKeys(const Name, Dest: String);
+var
+  Lines: TArrayOfString;
+  I, Eq: Integer;
+  Line, Section, Key: String;
+begin
+  if not FileExists(Dest) then exit;
+  ExtractTemporaryFile('template-' + Name + '.ini');
+  if not LoadStringsFromFile(ExpandConstant('{tmp}\template-') + Name + '.ini', Lines) then exit;
+  Section := '';
+  for I := 0 to GetArrayLength(Lines) - 1 do
+  begin
+    Line := Trim(Lines[I]);
+    if (Line = '') or (Line[1] = ';') or (Line[1] = '#') then continue;
+    if (Line[1] = '[') and (Line[Length(Line)] = ']') then
+    begin
+      Section := Copy(Line, 2, Length(Line) - 2);
+      continue;
+    end;
+    Eq := Pos('=', Line);
+    if (Section = '') or (Eq < 2) then continue;
+    Key := Trim(Copy(Line, 1, Eq - 1));
+    if not IniKeyExists(Section, Key, Dest) then
+    begin
+      SetIniString(Section, Key, Trim(Copy(Line, Eq + 1, Length(Line))), Dest);
+      Log(Format('%s: added [%s] %s', [Dest, Section, Key]));
+    end;
+  end;
+end;
+
+procedure AddMissingPluginKeys(const Name: String);
+begin
+  if Wanted(Name) then AddMissingKeys(Name, ExpandConstant('{app}\bin\plugins\') + Name + '\' + Name + '.ini');
+end;
+
 var
   PlayTestExcluded: Boolean;
 
@@ -353,6 +406,24 @@ begin
     Code := DefenderFolder('Add', ExpandConstant('{app}\bin\plugins\PlayTest'));
     Log(Format('Defender folder exclusion for Play Test: %d', [Code]));
     PlayTestExcluded := Code = 0;
+  end;
+  if CurStep = ssPostInstall then
+  begin
+    if FullRun then AddMissingKeys('RadiantPlugins', ExpandConstant('{app}\bin\plugins\RadiantPlugins.ini'));
+    AddMissingPluginKeys('TeamCreate');
+    AddMissingPluginKeys('RadiantPlus');
+    AddMissingPluginKeys('APEPlus');
+    { meshopt_lods replaces meshopt_autolod, so every install starts with meshoptimizer LODs off }
+    { autolod_fixes replaces raise_autolod_limit and repair_autolod_normals }
+    if Wanted('LauncherPlus') then
+    begin
+      Ini := ExpandConstant('{app}\bin\plugins\LauncherPlus\LauncherPlus.ini');
+      DeleteIniEntry('linker', 'meshopt_autolod', Ini);
+      DeleteIniEntry('linker', 'raise_autolod_limit', Ini);
+      DeleteIniEntry('linker', 'repair_autolod_normals', Ini);
+    end;
+    AddMissingPluginKeys('LauncherPlus');
+    AddMissingPluginKeys('PlayTest');
   end;
   { PlayTest.ini [defender] is read by Play Test's own offer and repair }
   if (CurStep = ssPostInstall) and PlayTestExcluded then

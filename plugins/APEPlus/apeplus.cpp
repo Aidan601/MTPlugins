@@ -71,6 +71,7 @@
 #include "themeeditor.h"
 #include "actionlog.h"
 #include "colorpicker.h"
+#include "crashguard.h"
 #include "filesearch.h"
 #include "notesounds.h"
 #include "previewfix.h"
@@ -1137,11 +1138,42 @@ namespace
             return u.ok;
         }
 
-        // --- type names by APE's type index (gdt.db _gdf PK_id - 1) ---
+        // --- type names by APE's type index: the schema list, schema +0 = interned name (lookup 0x14007CBC0) ---
         std::vector<std::wstring> g_typeNames;
+        int ReadApeTypeNames(const char** out, int cap)   // -1 = list unreachable
+        {
+            if (!rp::Ape()) return -1;
+            uint8_t** gSchemas = static_cast<uint8_t**>(rp::Ape()->ApeAddress(rp::self, kTypeSchemas));
+            __try
+            {
+                if (!gSchemas || !*gSchemas) return -1;
+                QListDataD* d = *reinterpret_cast<QListDataD**>(*gSchemas + off_Global_List);
+                if (!d || d->end < d->begin) return -1;
+                int n = d->end - d->begin;
+                if (n > cap) return -1;
+                for (int i = 0; i < n; ++i)
+                {
+                    uint8_t* schema = static_cast<uint8_t*>(d->array[d->begin + i]);
+                    out[i] = schema ? *reinterpret_cast<const char**>(schema) : nullptr;
+                }
+                return n;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER) { return -1; }
+        }
         bool LoadTypeNames()
         {
             if (!g_typeNames.empty()) return true;
+            const char* apeNames[1024] = {};
+            int apeCount = ReadApeTypeNames(apeNames, 1024);
+            if (apeCount == 0) return false;   // schemas not loaded yet
+            if (apeCount > 0)
+            {
+                std::vector<std::wstring> names;
+                for (int i = 0; i < apeCount; ++i) { std::string n = apeNames[i] ? apeNames[i] : ""; std::wstring w(n.begin(), n.end()); names.push_back(Lower(w.c_str(), w.size())); }
+                g_typeNames = names;
+                rp::Log("filter: %d asset types from APE's schema list", apeCount);
+                return true;
+            }
             HMODULE sq = GetModuleHandleW(L"sqlite64r.dll");
             if (!sq || !rp::Ape()) return false;
             using OpenFn = int (*)(const char*, void**, int, const char*); using PrepFn = int (*)(void*, const char*, int, void**, const char**);
@@ -1171,7 +1203,7 @@ namespace
             close(db);
             if (names.empty()) return false;
             g_typeNames = names;
-            rp::Log("filter: %zu asset types from gdt.db%s", names.size(), gaps ? " (PK gaps: index = PK_id-1)" : "");
+            rp::Log("filter: %zu asset types from gdt.db%s (APE's schema list unreachable, the order may not match APE)", names.size(), gaps ? " (PK gaps: index = PK_id-1)" : "");
             return true;
         }
 
@@ -1683,6 +1715,7 @@ namespace
             const uint64_t now = Now();
             if (g_last) { const double d = Ms(now - g_last); if (d < 500.0) g_avgMs = g_avgMs > 0 ? g_avgMs * 0.95 + d * 0.05 : d; }
             g_last = now; ++g_frames;
+            ba::crashguard::BeforeFrame();
             ba::previewfix::BeforeFrame(widget);
             ba::weaponpreview::BeforeFrame();
             g_orig(widget, a2);
@@ -2314,7 +2347,7 @@ namespace
         {
             const wchar_t* ini = g_launcherIni.c_str();
             return g_active && GetPrivateProfileIntW(L"launcherplus", L"enabled", 1, ini) && GetPrivateProfileIntW(L"linker", L"enabled", 1, ini) &&
-                   GetPrivateProfileIntW(L"linker", L"patches", 1, ini) && GetPrivateProfileIntW(L"linker", L"meshopt_autolod", 1, ini);
+                   GetPrivateProfileIntW(L"linker", L"patches", 1, ini) && GetPrivateProfileIntW(L"linker", L"meshopt_lods", 0, ini);
         }
 
         // meshoptimizer LODs get their own cache files, so switching never shows the other simplifier's
@@ -2351,7 +2384,7 @@ namespace
                     g_print(0, "APEPlus: this model has %u bones. The linker refuses auto LODs over %u bones (\"Model is too complex for auto LOD\"), give it LOD files instead.\n", unsigned(bones), unsigned(kStockBones));
                 else if (tell)
                     g_print(0, "APEPlus: this model has %u faces. The stock linker refuses auto LODs over 220,000 faces (\"Model is too complex for auto LOD\"). "
-                               "Launcher+ builds them (LauncherPlus.ini [linker] raise_autolod_limit).\n", unsigned(faces));
+                               "Launcher+ builds them (LauncherPlus.ini [linker] autolod_fixes).\n", unsigned(faces));
             }
             struct Simplifier
             {
@@ -4062,6 +4095,7 @@ namespace
     int OnLoad(void)
     {
         if (!rp::InApe()) { rp::Log("APEPlus is for APE only"); return 0; }
+        ba::crashguard::Install();
         BindQt();
         filt::g_fast = rp::ConfigGetBool("filter", "fast", true);
         filt::g_debounceMs = rp::ConfigGetInt("filter", "debounce_ms", 150);
@@ -4104,6 +4138,7 @@ namespace
     void OnUnload(void)
     {
         discordrpc::Shutdown();
+        ba::crashguard::Shutdown();
         ba::actionlog::Shutdown();
         ba::colorpicker::Shutdown();
         ba::notesounds::Shutdown();
@@ -4168,6 +4203,7 @@ namespace
         std::string c = cmd;
         char buf[512];
         if (ba::actionlog::Command(c, reply)) return reply.c_str();
+        if (ba::crashguard::Command(c, reply)) return reply.c_str();
         if (ba::colorpicker::Command(c, reply)) return reply.c_str();
         if (ba::filesearch::Command(c, reply)) return reply.c_str();
         if (ba::vcache::Command(c, reply)) return reply.c_str();
@@ -4433,7 +4469,7 @@ extern "C" MODTOOLS_PLUGIN_EXPORT const ModToolsPluginApi* ModToolsPluginEntry(M
     api.apiVersion = MODTOOLS_PLUGIN_API_VERSION;
     api.name = "APEPlus";
     api.displayName = "APE+";
-    api.version = "1.1.1";
+    api.version = "1.1.2";
     api.author = "Figglebottom";
     api.description = "QOL fixes and improvements to APE.";
     api.url = "https://github.com/Aidan601/MTPlugins/tree/main/plugins/APEPlus";

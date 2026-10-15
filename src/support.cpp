@@ -385,6 +385,23 @@ namespace
     struct Note { const char* release; const char* plugin; uint32_t apps; const char* html; };
     const uint32_t kAllApps = MODTOOLS_APP_RADIANT | MODTOOLS_APP_APE | MODTOOLS_APP_LAUNCHER;
     const Note kNotes[] = {
+        // ---- 1.1.2 ----
+        { "1.1.2", nullptr, MODTOOLS_APP_LAUNCHER,
+          "<b>Updates</b><br>Updating MTPlugins now installs without the Setup wizard and reopens the launcher. Your plugin settings are kept and new ones are added." },
+        { "1.1.2", "RadiantPlus", MODTOOLS_APP_RADIANT,
+          "<b>Radiant+</b><ul>"
+          "<li>Auto LODs from meshoptimizer are now off by default, as they can look worse on custom models. A fix is in the works. Until then, <code>meshopt_lods=1</code> under <code>[linker]</code> in LauncherPlus.ini turns them on.</li>"
+          "<li>Light bakes on big maps are less likely to run out of memory.</li></ul>" },
+        { "1.1.2", "APEPlus", MODTOOLS_APP_APE,
+          "<b>APE+</b><ul>"
+          "<li>APE's internal check boxes no longer close APE. Choose Yes to keep working and save your changes.</li>"
+          "<li>Fixed a Preview window check failing on animations with bad rotations.</li>"
+          "<li>Fixed the type filter showing the wrong assets when extra asset types are installed.</li>"
+          "<li>Auto LODs from meshoptimizer are now off by default, matching Launcher+.</li></ul>" },
+        { "1.1.2", "LauncherPlus", MODTOOLS_APP_LAUNCHER,
+          "<b>Launcher+</b><ul>"
+          "<li>Auto LODs from meshoptimizer are now off by default, as they can look worse on custom models. A fix is in the works. Until then, <code>meshopt_lods=1</code> under <code>[linker]</code> in LauncherPlus.ini turns them on.</li>"
+          "<li>The Light step now says when Radiant closes during a bake, and when the PC ran out of memory.</li></ul>" },
         // ---- 1.1.1 ----
         { "1.1.1", nullptr, kAllApps,
           "<b>Plugins</b> (Ctrl+Shift+P)<br>MTPlugins' own plugins now update from here too, without running Setup again." },

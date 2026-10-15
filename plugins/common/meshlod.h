@@ -1,4 +1,4 @@
-// meshopt_autolod: the auto LOD simplifier (linker+0x7AE170, APE+0x217930) replaced by meshoptimizer's simplifyWithUpdate.
+// meshopt_lods: the auto LOD simplifier (linker+0x7AE170, APE+0x217930) replaced by meshoptimizer's simplifyWithUpdate.
 // Only what the reducer reads back is produced: the face vector shrunk in place, corner positions, an attribute block per face.
 #pragma once
 #include <windows.h>

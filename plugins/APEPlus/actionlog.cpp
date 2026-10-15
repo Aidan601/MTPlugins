@@ -115,6 +115,18 @@ namespace
             pos = nl + 1;
         }
     }
+    // a file older than this process belongs to the previous APE session (maybe a crash): kept as actionlog.prev.log
+    void KeepPreviousSession()
+    {
+        std::wstring path = ReportPath();
+        WIN32_FILE_ATTRIBUTE_DATA fa;
+        FILETIME created, exited, kernel, user;
+        if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &fa)) return;
+        if (!GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user)) return;
+        if (CompareFileTime(&fa.ftLastWriteTime, &created) >= 0) return;   // this session's own file (a hot reload)
+        std::wstring prev = path.substr(0, path.size() - 4) + L".prev.log";
+        if (MoveFileExW(path.c_str(), prev.c_str(), MOVEFILE_REPLACE_EXISTING)) rp::Log("actionlog: the previous session's log kept as actionlog.prev.log");
+    }
     void WriteReportFile()
     {
         g_reportDirty = false;
@@ -674,6 +686,7 @@ void Setup()
     int maxLines = rp::ConfigGetInt("actionlog", "max_lines", 2000);
     g_ringMax = size_t(maxLines < 100 ? 100 : maxLines > 100000 ? 100000 : maxLines);
     g_inReports = rp::ConfigGetBool("actionlog", "in_reports", true);
+    KeepPreviousSession();
     g_display = rp::ConfigGetBool("actionlog", "enabled", false);
     UpdateActive();
     if (g_display && !g_on) g_display = false;
@@ -763,7 +776,7 @@ bool Command(const std::string& command, std::string& reply)
         g_inReports = arg.back() == '1';
         rp::ConfigSet("actionlog", "in_reports", g_inReports ? "1" : "0");
         if (g_inReports) { g_reportDirty = true; g_nextReportWrite = 0; }
-        else DeleteFileW(ReportPath().c_str());
+        else { std::wstring path = ReportPath(); DeleteFileW(path.c_str()); DeleteFileW((path.substr(0, path.size() - 4) + L".prev.log").c_str()); }
         UpdateActive();
         reply = g_inReports ? "actionlog entries kept for problem reports (actionlog.log in the plugin folder)" : "actionlog entries no longer kept for problem reports (actionlog.log deleted)";
         return true;

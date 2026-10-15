@@ -7,6 +7,7 @@
 //   Plugins      PendingPlugins, AskPlugins (renamed MessageBox buttons), ReportPlugins
 #include <windows.h>
 #include <shellapi.h>
+#include <tlhelp32.h>
 #include <atomic>
 #include <mutex>
 #include <vector>
@@ -197,10 +198,23 @@ namespace
             g_phase = Idle;
             return;
         }
-        q += "Update now? The installer closes the launcher and the editors first and keeps your settings.";
+        q += "Update now? It installs by itself with the plugins you have and keeps your settings. The launcher closes and opens again when it is done.";
         if (Box(q, MB_YESNO | MB_ICONINFORMATION) != IDYES) { SetStatus("update to " + r.version + " declined for now"); g_phase = Idle; return; }
         g_phase = Downloading;
         Wrap(DownloadWorker, nullptr);
+    }
+
+    // Radiant or APE running anywhere: they hold the plugin files, and Setup would close them unsaved
+    bool EditorOpen()
+    {
+        HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if (snap == INVALID_HANDLE_VALUE) return false;
+        PROCESSENTRY32W pe{ sizeof pe };
+        bool found = false;
+        for (BOOL ok = Process32FirstW(snap, &pe); ok && !found; ok = Process32NextW(snap, &pe))
+            found = !_wcsicmp(pe.szExeFile, L"Radiant_modtools.exe") || !_wcsicmp(pe.szExeFile, L"asseteditor_modtools.exe");
+        CloseHandle(snap);
+        return found;
     }
 
     void Launch()
@@ -209,10 +223,18 @@ namespace
         Release r;
         { std::lock_guard<std::mutex> lk(g_mu); path = g_setupPath; r = g_rel; }
         g_phase = Idle;
+        while (EditorOpen())
+            if (Box("Radiant or APE is open. Save your work and close them, then press Retry.", MB_RETRYCANCEL | MB_ICONWARNING) != IDRETRY)
+            {
+                SetStatus("update to " + r.version + " put off: an editor is open");
+                return;
+            }
+        // silent: the previous folder, plugins and tasks, a progress window only, then the launcher again (Setup's RELAUNCH)
         SHELLEXECUTEINFOW sei{ sizeof sei };
         sei.fMask = SEE_MASK_NOASYNC;
         sei.hwnd = mt::MainWindow();
         sei.lpFile = path.c_str();
+        sei.lpParameters = L"/SILENT /NORESTART /RELAUNCH=1";
         sei.nShow = SW_SHOWNORMAL;
         if (ShellExecuteExW(&sei)) { SetStatus("installer started"); return; }
         DWORD e = GetLastError();

@@ -1,4 +1,4 @@
-// Radiant's auto LOD previews from meshoptimizer while LauncherPlus.ini has meshopt_autolod on, so the editor shows what the linker builds.
+// Radiant's auto LOD previews from meshoptimizer while LauncherPlus.ini has meshopt_lods on, so the editor shows what the linker builds.
 // Same tfbDecimate code and layout as the linker and APE: plugins/common/meshlod.h does the reduction.
 #include "modtools_plugin.hpp"
 #include "autolod.h"
@@ -34,7 +34,7 @@ namespace
     {
         const wchar_t* ini = g_launcherIni.c_str();
         return g_active && GetPrivateProfileIntW(L"launcherplus", L"enabled", 1, ini) && GetPrivateProfileIntW(L"linker", L"enabled", 1, ini) &&
-               GetPrivateProfileIntW(L"linker", L"patches", 1, ini) && GetPrivateProfileIntW(L"linker", L"meshopt_autolod", 1, ini);
+               GetPrivateProfileIntW(L"linker", L"patches", 1, ini) && GetPrivateProfileIntW(L"linker", L"meshopt_lods", 0, ini);
     }
 
     // meshoptimizer LODs get their own cache files (APEPlus uses the same key), so switching never shows the other simplifier's

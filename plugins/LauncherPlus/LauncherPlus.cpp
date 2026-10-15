@@ -54,6 +54,9 @@ namespace
         return GetPrivateProfileIntW(L"launcherplus", L"enabled", 1, g_ini.c_str()) && IsOn(g_toggles[2]);
     }
 
+    // auto LODs from meshoptimizer: ini only, the linker, APE+ and Radiant+ previews read the same key
+    bool MeshoptOn() { return GetPrivateProfileIntW(L"linker", L"meshopt_lods", 0, g_ini.c_str()) != 0; }
+
     bool DefenderApplied() { return GetPrivateProfileIntW(L"defender", L"exclusions", 0, g_ini.c_str()) != 0; }
 
     HWND MainWindow()
@@ -435,6 +438,7 @@ namespace
         {
             reply = g_status;
             for (const Toggle& t : g_toggles) reply += std::string(" ") + t.label + (IsOn(t) ? ": on." : ": off.");
+            reply += MeshoptOn() ? " Auto LODs with meshoptimizer: on." : " Auto LODs with meshoptimizer: off.";
             reply += " " + lightquality::Status() + ".";
             reply += DefenderApplied() ? " Defender exclusions: applied." : " Defender exclusions: not applied.";
             reply += " " + steamstart::Status() + ".";
@@ -458,7 +462,7 @@ extern "C" MODTOOLS_PLUGIN_EXPORT const ModToolsPluginApi* ModToolsPluginEntry(M
     api.apiVersion = MODTOOLS_PLUGIN_API_VERSION;
     api.name = "LauncherPlus";
     api.displayName = "Launcher+";
-    api.version = "1.1.1";
+    api.version = "1.1.2";
     api.author = "Figglebottom";
     api.description = "QOL fixes and improvements to the Launcher.";
     api.url = "https://github.com/Aidan601/MTPlugins/tree/main/plugins/LauncherPlus";

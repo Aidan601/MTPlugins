@@ -85,6 +85,7 @@ xcopy /y /i /d "$(ProjectDir)deffiles" "$(SolutionDir)build\$(Configuration)\plu
     <ClCompile Include="apeplus.cpp" />
     <ClCompile Include="actionlog.cpp" />
     <ClCompile Include="colorpicker.cpp" />
+    <ClCompile Include="crashguard.cpp" />
     <ClCompile Include="filesearch.cpp" />
     <ClCompile Include="vcache.cpp" />
     <ClCompile Include="notesounds.cpp" />
@@ -107,6 +108,7 @@ xcopy /y /i /d "$(ProjectDir)deffiles" "$(SolutionDir)build\$(Configuration)\plu
     <ClInclude Include="..\common\colorextras.h" />
     <ClInclude Include="actionlog.h" />
     <ClInclude Include="colorpicker.h" />
+    <ClInclude Include="crashguard.h" />
     <ClInclude Include="filesearch.h" />
     <ClInclude Include="vcache.h" />
     <ClInclude Include="notesounds.h" />

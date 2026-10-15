@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <string>
@@ -39,8 +40,25 @@ br::bakeguide::Env g_env{};
 std::wstring g_dir;
 std::atomic<int> g_mode{0};   // 0 off, 1 on, 2 verify, 3 diag
 std::atomic<uint64_t> g_passes{0}, g_hits{0}, g_misses{0}, g_saved{0}, g_verified{0}, g_mismatches{0}, g_bypassed{0}, g_rejected{0},
-    g_restoreFailed{0};
+    g_restoreFailed{0}, g_lowSkips{0};
 uint64_t g_capMB = 4096;
+
+// Low-memory guard, same floor as the fill caches: a snapshot or a save payload is hundreds of MB per in-flight job, and
+// a worker's bad_alloc kills the bake (it comes back out of UpdateGI uncaught). Checked at most every 500 ms.
+uint64_t g_floorBytes = uint64_t(3) << 30;
+std::atomic<uint64_t> g_memTick{0};
+std::atomic<bool> g_memLow{false};
+bool MemoryLow()
+{
+    const uint64_t now = GetTickCount64();
+    if (now - g_memTick.load(std::memory_order_relaxed) >= 500)
+    {
+        g_memTick.store(now, std::memory_order_relaxed);
+        MEMORYSTATUSEX m{}; m.dwLength = sizeof m;
+        if (GlobalMemoryStatusEx(&m)) g_memLow = m.ullAvailPageFile < g_floorBytes;
+    }
+    return g_memLow.load(std::memory_order_relaxed);
+}
 
 void Log(const char* fmt, ...)
 {
@@ -806,6 +824,12 @@ int64_t __fastcall hk_TracePass(uint8_t* probe, uint8_t** scene, int quality, ch
     try { key = MakeKey(probe, sceneObj, quality, grid, debugVoxel, freeSpace); } catch (...) { key = Key{}; }
     if (mode == 3) return Diag(probe, scene, quality, grid, debugVoxel, freeSpace, key);
 
+    if (MemoryLow())
+    {
+        // Too little free commit for a snapshot or a save payload: trace the probe the stock way, same result, slower.
+        ++g_lowSkips;
+        return o_TracePass(probe, scene, quality, grid, debugVoxel, freeSpace);
+    }
     const int slot = At<int>(probe, off_Slot);
     if (!key.usable || (slot >= 0 && slot <= 3) || !g_intersect4)
     {
@@ -945,7 +969,7 @@ void Prune()
 
 std::string Status()
 {
-    char buf[640];
+    char buf[768];
     double msTraced, msLoaded; uint64_t saved, loaded;
     {
         std::lock_guard<std::mutex> lk(g_statLock);
@@ -953,12 +977,13 @@ std::string Status()
     }
     snprintf(buf, sizeof buf,
              "trace cache %s%s: %llu probe traces, %llu loaded from the cache (%.1f s, %.0f MB), %llu traced (%.1f s), %llu saved (%.0f MB), "
-             "%llu rejected by the guard rays, %llu restore failures, %llu bypassed, %llu verified (%llu guard mismatches)",
+             "%llu rejected by the guard rays, %llu restore failures, %llu bypassed, %llu skipped on low memory (floor %llu MB free commit), "
+             "%llu verified (%llu guard mismatches)",
              ModeName(g_mode.load()), g_installed ? "" : " (unavailable)", (unsigned long long)g_passes.load(), (unsigned long long)g_hits.load(),
              msLoaded / 1000.0, double(loaded) / 1048576.0, (unsigned long long)g_misses.load(), msTraced / 1000.0,
              (unsigned long long)g_saved.load(), double(saved) / 1048576.0, (unsigned long long)g_rejected.load(),
-             (unsigned long long)g_restoreFailed.load(), (unsigned long long)g_bypassed.load(), (unsigned long long)g_verified.load(),
-             (unsigned long long)g_mismatches.load());
+             (unsigned long long)g_restoreFailed.load(), (unsigned long long)g_bypassed.load(), (unsigned long long)g_lowSkips.load(),
+             (unsigned long long)(g_floorBytes >> 20), (unsigned long long)g_verified.load(), (unsigned long long)g_mismatches.load());
     std::string s = buf;
     if (g_mode.load() == 3) s += "; changed probe bytes" + UnionRanges();
     return s;
@@ -967,6 +992,7 @@ std::string Status()
 void ClearStats()
 {
     g_passes = 0; g_hits = 0; g_misses = 0; g_saved = 0; g_verified = 0; g_mismatches = 0; g_bypassed = 0; g_rejected = 0; g_restoreFailed = 0;
+    g_lowSkips = 0;
     std::lock_guard<std::mutex> lk(g_statLock);
     g_msTraced = 0; g_msLoaded = 0; g_bytesSaved = 0; g_bytesLoaded = 0;
 }
@@ -978,6 +1004,8 @@ void Setup(const br::bakeguide::Env& env, const std::wstring& cacheDir)
     const int mode = ParseMode(env.get ? env.get("trace_cache", "1") : std::string("1"));
     const std::string cap = env.get ? env.get("trace_cache_mb", "4096") : std::string("4096");
     g_capMB = std::max<uint64_t>(64, std::strtoull(cap.c_str(), nullptr, 10));
+    const int floorMb = env.get ? atoi(env.get("trace_min_free_mb", "3072").c_str()) : 3072;
+    g_floorBytes = uint64_t(floorMb < 0 ? 0 : floorMb) << 20;
     g_mode = mode && Install() ? mode : 0;
     if (g_mode.load()) { try { Prune(); } catch (...) {} }
     Log("bake: %s", Status().c_str());
