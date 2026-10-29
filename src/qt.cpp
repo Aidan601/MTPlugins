@@ -744,6 +744,16 @@ namespace qt
         size_t tab = k.find('\t'); if (tab != std::string::npos) k = k.substr(0, tab);   // "Undo\tCtrl+Z"
         return k;
     }
+    // the entry among acts whose label is want, else the first that starts with it as whole words
+    static void* FindMenuEntry(const std::vector<void*>& acts, const std::string& want)
+    {
+        for (void* a : acts)
+            if (!ActionIsSeparator(a) && MenuKey(ActionText(a)) == want) return a;
+        // Radiant appends the argument to entries ("Undo Paste"): accept a word prefix
+        for (void* a : acts)
+            if (!ActionIsSeparator(a)) { std::string k = MenuKey(ActionText(a)); if (k.size() > want.size() && k.compare(0, want.size(), want) == 0 && k[want.size()] == ' ') return a; }
+        return nullptr;
+    }
     // "File/Save" paths from the menu bar down, returns the action
     void* FindMenuAction(void* mainWindow, const std::string& path)
     {
@@ -752,15 +762,16 @@ namespace qt
         size_t pos = 0;
         while (holder && pos <= path.size())
         {
-            size_t slash = path.find('/', pos);
-            std::string want = MenuKey(path.substr(pos, slash == std::string::npos ? std::string::npos : slash - pos));
-            found = nullptr;
+            // a label may hold a '/' ("Select by Key/Value"): when a segment names no entry, it is tried joined to
+            // the next ones, so a path that resolves without joining resolves as before
             std::vector<void*> acts = WidgetActions(holder);
-            for (void* a : acts)
-                if (!ActionIsSeparator(a) && MenuKey(ActionText(a)) == want) { found = a; break; }
-            // Radiant appends the argument to entries ("Undo Paste"): accept a word prefix
-            if (!found) for (void* a : acts)
-                if (!ActionIsSeparator(a)) { std::string k = MenuKey(ActionText(a)); if (k.size() > want.size() && k.compare(0, want.size(), want) == 0 && k[want.size()] == ' ') { found = a; break; } }
+            size_t slash = path.find('/', pos);
+            for (;;)
+            {
+                found = FindMenuEntry(acts, MenuKey(path.substr(pos, slash == std::string::npos ? std::string::npos : slash - pos)));
+                if (found || slash == std::string::npos) break;
+                slash = path.find('/', slash + 1);
+            }
             if (!found || slash == std::string::npos) break;
             holder = ActionMenu(found);
             pos = slash + 1;
