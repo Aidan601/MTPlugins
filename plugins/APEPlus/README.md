@@ -10,6 +10,7 @@ Fixes and improvements for APE, the Black Ops III Asset Property Editor. Nothing
 - The first material after APE starts opens without the long freeze (about 23 seconds down to 6).
 - XModel Info and the Preview window build the auto LODs of big models several times faster.
 - Previewed auto LODs match the ones Launcher+ builds, so what you see is what the game gets.
+- Adding many new GDT files at once (an export or a port) no longer freezes APE for minutes: thousands of new assets load in seconds.
 
 ## Editing
 
@@ -18,6 +19,7 @@ Fixes and improvements for APE, the Black Ops III Asset Property Editor. Nothing
 - The Log actions box in the Output pane's title bar lists what you changed: each property with its old and new value.
 - The Select Color dialog takes hex and 0-1 colors, sets light colors by Kelvin and copies the color as hex or 0-1.
 - The Preview window plays an animation's sound notetracks (GDT Sound notes and exported `sndnt#` notes) from your alias csv files and `sound_assets`. Edits to the alias files and sound files are picked up on the next play.
+- The Preview window also plays an animation's fx notetracks (Play Fx, Stop Fx, Kill Fx) on the bone they name, following the animation, with the effects' own sounds. Sprites, and beams whose source and target are in the same effect: lights, decals and trails are left out.
 - APE's internal check boxes no longer close APE: choose Yes to keep working and save your changes (`[crashguard]` in APEPlus.ini). Bad rotations in the Preview window are caught before they fail a check.
 - Viewmodel animations (Use Bones off) no longer look stretched in the Preview window, and the AssetViewer Preview Options attach works: the Child Tag is used, swapped tags are fixed with a note in the Output pane, and an attached gun follows the animation like in game.
 
@@ -42,8 +44,10 @@ Most of the above is set in View > Preferences. The rest lives in `APEPlus.ini` 
 - `[images]` extra image formats
 - `[open]` faster asset opening
 - `[startup]` the first material without the freeze
+- `[reload]` the reload after new GDT files appear
 - `[deffiles]` APE+'s own property layouts in `plugins\APEPlus\deffiles` instead of the installed ones
 - `[notesounds]` notetrack sounds in the Preview window
+- `[notefx]` notetrack fx in the Preview window
 - `[xanimpreview]` the viewmodel and attach fixes in the Preview window
 - `[actionlog]` the action log and how much of it goes into problem reports
 - `[colorpicker]` the Select Color extras

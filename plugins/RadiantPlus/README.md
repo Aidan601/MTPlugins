@@ -11,6 +11,8 @@ Fixes and improvements for Radiant, the Black Ops III map editor. Nothing in Rad
 - Smoother 2D views on big maps: small objects are left out while you pan, zoom or drag, and the full view comes back as soon as you stop.
 - Guards against crashes Radiant is known for. An assert box lets you continue instead of closing Radiant.
 
+- An APE save no longer freezes Radiant: the gdt.db reload drops its old copies on a background thread, and a save that rewrites gdt.db several times reloads it once.
+
 ## Lighting
 
 - Light bakes are faster, and Low and Medium come out closer to High.

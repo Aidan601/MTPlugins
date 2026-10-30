@@ -1,6 +1,8 @@
 // In-process cod2map64 optimizations, injected by BuildPlusWorker into the suspended compiler.
 // Each one verifies its byte signatures before any hook is created. Addresses: src/radiant_addrs.h (cod2mapaddr).
 #include <windows.h>
+#define PSAPI_VERSION 2
+#include <psapi.h>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -18,6 +20,10 @@
 #include "groupbounds.h"
 #include "soupsplit.h"
 #include "qhullarena.h"
+#include "collisionleaf.h"
+#include "qhullstart.h"
+#include "coalescetree.h"
+#include "fastheap.h"
 #include "filecount.h"
 
 namespace
@@ -44,6 +50,10 @@ namespace
         { L"c10", "Group Bounds", groupbounds::Verify, groupbounds::Install, groupbounds::Report },
         { L"c11", "Soup Split Groups", soupsplit::Verify, soupsplit::Install, soupsplit::Report },
         { L"c12", "Qhull Arena", qhullarena::Verify, qhullarena::Install, qhullarena::Report },
+        { L"c13", "Collision Leaf Set", collisionleaf::Verify, collisionleaf::Install, collisionleaf::Report },
+        { L"c14", "Qhull Startup", qhullstart::Verify, qhullstart::Install, qhullstart::Report },
+        { L"c15", "Coalesce Tree", coalescetree::Verify, coalescetree::Install, coalescetree::Report },
+        { L"c16", "Fast Heap", fastheap::Verify, fastheap::Install, fastheap::Report },
     };
 
     constexpr size_t kCount = sizeof kOptimizations / sizeof *kOptimizations;
@@ -120,6 +130,9 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID)
         for (size_t i = 0; i < kCount; ++i)
             if (g_enabled[i]) kOptimizations[i].report(stderr);
         filecount::Report(stderr);
+        PROCESS_MEMORY_COUNTERS pmc = { sizeof pmc };
+        if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof pmc))
+            fprintf(stderr, "[BetterBuild] Peak memory: %zu MB working set, %zu MB committed.\n", size_t(pmc.PeakWorkingSetSize >> 20), size_t(pmc.PeakPagefileUsage >> 20));
         fflush(stderr);
     }
     return TRUE;

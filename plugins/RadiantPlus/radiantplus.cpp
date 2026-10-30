@@ -26,6 +26,7 @@
 #include "fxpreview.h"
 #include "iconsize.h"
 #include "prefabexplore.h"
+#include "gdtreload.h"
 #include "colorpicker.h"
 #include "filedialogs.h"
 #include "dynbuffers.h"
@@ -5302,7 +5303,6 @@ namespace
         const LONG after = InterlockedDecrement(&g_v6MapLoadDepth);
         if (after == 0)
         {
-            if (!g_v6TouchTailUntil) V6SetTimestampBypass(false);   // else OnTick ends it after the load's tail
             if (rp::host && rp::host->RequestRedraw)
                 rp::host->RequestRedraw(rp::self, MODTOOLS_VIEW_3D | MODTOOLS_VIEW_2D);
         }
@@ -5356,6 +5356,7 @@ namespace
         const bool pf = DeepInstall("prefab serial loop", kDeepPrefabLoop, &hk_DeepPrefabLoop, &g_oDeepPrefabLoop);
         const bool mp = DeepInstall("iwmap parser", kDeepMapParser, &hk_DeepMapParser, &g_oDeepMapParser);
         const bool ao = DeepInstall("asset-cache open/read", kDeepAssetCacheOpen, &hk_DeepAssetOpen, &g_oDeepAssetOpen);
+        if (ao && g_v6SkipLoadTimestamps) V6SetTimestampBypass(true);   // the touch stays deferred all session, br::assettouch sets it
         const bool ad = DeepInstall("asset-cache decompress", kDeepAssetCacheDecomp, &hk_DeepAssetDecomp, &g_oDeepAssetDecomp);
         const bool ml = DeepInstall("Map_LoadFile thunk", kV6MapLoadFile, &hk_V6MapLoad, &g_oV6MapLoad);
         const bool gr = DeepInstall("GeoCache reset thunk", kV61GeoCacheResetThunk, &hk_V61GeoReset, &g_oV61GeoReset);
@@ -8872,6 +8873,7 @@ namespace
         br::fxswap::Setup();
         br::fxpreview::Setup();
         br::prefabexplore::Setup();
+        br::gdtreload::Setup();
         br::iconsize::Setup();
         br::colorpicker::Setup();
         br::seloutline::Setup();
@@ -8919,6 +8921,7 @@ namespace
         br::rotgizmo::Shutdown();
         br::campresets::Shutdown();
         br::fxpreview::Shutdown();
+        br::gdtreload::Shutdown();
         br::prefabexplore::Shutdown();
         br::iconsize::Shutdown();
         br::colorpicker::Shutdown();
@@ -8939,7 +8942,7 @@ namespace
     }
 
     // Every root map load, from the host (its Map_LoadFile hook, reloads and the command-line map, which the thunk hook above misses).
-    // The asset-cache touch skip (map_skip_asset_timestamp) runs from here and stays on for 3 s after the load, then br::assettouch sets the skipped touches.
+    // The asset-cache touch skip (map_skip_asset_timestamp) is on all session. From here to 3 s after the load the skipped touches wait, then br::assettouch sets them.
     void OnMapLoading(const wchar_t* path)
     {
         g_v6TouchTailUntil = 0;
@@ -8980,9 +8983,12 @@ namespace
         if (g_v6TouchTailUntil && now >= g_v6TouchTailUntil && !V6MapLoading())
         {
             g_v6TouchTailUntil = 0;
-            if (!g_v6TimestampPatched || V6SetTimestampBypass(false)) br::assettouch::Flush();
+            br::assettouch::Flush();
             br::filesearch::LoadEnd();
         }
+        // outside a load and its tail the skipped touches are set every 2 s, off the main thread
+        static uint64_t s_nextTouchFlush = 0;
+        if (!g_v6TouchTailUntil && !V6MapLoading() && now >= s_nextTouchFlush) { s_nextTouchFlush = now + 2000; br::assettouch::Flush(); }
         br::rotgizmo::Tick();
         br::campresets::Tick();
         if (g_v8StaticBatchEnabled && !g_oCensusBackendDraw) EnsureCensusBackendDrawHook();
@@ -9065,6 +9071,7 @@ namespace
         if (br::fxswap::Command(c, reply)) return reply.c_str();
         if (br::fxpreview::Command(c, reply)) return reply.c_str();
         if (br::prefabexplore::Command(c, reply)) return reply.c_str();
+        if (br::gdtreload::Command(c, reply)) return reply.c_str();
         if (br::iconsize::Command(c, reply)) return reply.c_str();
         if (br::colorpicker::Command(c, reply)) return reply.c_str();
         if (br::filedialogs::Command(c, reply)) return reply.c_str();
@@ -9495,7 +9502,8 @@ namespace
         {
             g_v6SkipLoadTimestamps = c.back() == '1';
             rp::ConfigSet("performance", "map_skip_asset_timestamp", g_v6SkipLoadTimestamps ? "1" : "0");
-            if (!g_v6SkipLoadTimestamps && !V6MapLoading()) V6SetTimestampBypass(false);
+            if (!g_v6SkipLoadTimestamps && !V6MapLoading()) { V6SetTimestampBypass(false); br::assettouch::Flush(); }
+            else if (g_v6SkipLoadTimestamps && g_oDeepAssetOpen) V6SetTimestampBypass(true);
             reply = V6Status();
             return reply.c_str();
         }
@@ -9970,7 +9978,7 @@ extern "C" MODTOOLS_PLUGIN_EXPORT const ModToolsPluginApi* ModToolsPluginEntry(M
     api.apiVersion = MODTOOLS_PLUGIN_API_VERSION;
     api.name = "RadiantPlus";
     api.displayName = "Radiant+";
-    api.version = "1.1.2";
+    api.version = "1.1.3";
     api.author = "Figglebottom";
     api.description = "QOL fixes and improvements to Radiant.";
     api.url = "https://github.com/Aidan601/MTPlugins/tree/main/plugins/RadiantPlus";

@@ -107,6 +107,7 @@ xcopy /y /i /d /e "$(SolutionDir)themes" "$(SolutionDir)build\$(Configuration)\p
     <ClCompile Include="fxpreview.cpp" />
     <ClCompile Include="iconsize.cpp" />
     <ClCompile Include="prefabexplore.cpp" />
+    <ClCompile Include="gdtreload.cpp" />
     <ClCompile Include="colorpicker.cpp" />
     <ClCompile Include="filedialogs.cpp" />
     <ClCompile Include="dynbuffers.cpp" />
@@ -150,6 +151,7 @@ xcopy /y /i /d /e "$(SolutionDir)themes" "$(SolutionDir)build\$(Configuration)\p
     <ClInclude Include="fxpreview.h" />
     <ClInclude Include="iconsize.h" />
     <ClInclude Include="prefabexplore.h" />
+    <ClInclude Include="gdtreload.h" />
     <ClInclude Include="colorpicker.h" />
     <ClInclude Include="filedialogs.h" />
     <ClInclude Include="dynbuffers.h" />

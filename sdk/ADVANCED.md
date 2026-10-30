@@ -175,7 +175,8 @@ For plugins that apply other people's edits or preview geometry, the host has a 
 
 - `SetCameraLutPreview` replaces the world LUT texture Radiant's camera binds with your own pixels, in memory only. Both buffers are tightly packed RGB `uint16` rows, at most 1024 x 1024, copied during the call.
 - `referenceRgb` is the LUT as it is on disk: the host compares it with the camera's bound textures to find the one to replace. Pass it when the base LUT changes, NULL on later updates of `previewRgb` alone.
-- `CameraLutPreviewStatus`: WAITING until a matching texture is bound, MATCHED once found, ACTIVE while the camera draws with it, NO_MATCH after 60 camera frames without one, UNSUPPORTED for a texture format it cannot write. `enabled = 0` puts the original back.
+- `CameraLutPreviewStatus`: WAITING until a matching texture is bound, MATCHED once found, ACTIVE while the camera draws with it, NO_MATCH after 60 camera frames without a candidate or 600 camera frames without a match, UNSUPPORTED for a texture format it cannot write. `enabled = 0` puts the original back.
+- The search looks at each texture the camera binds once, reads back only uncompressed ones of the preview's size, one per frame without waiting on the GPU, and stops after 600 camera frames. Pass `referenceRgb` again to search again (after building the LUT material, for example), or turn the preview off and on; updates with `previewRgb` alone while it is on never restart it.
 
 ### Running on an older host
 

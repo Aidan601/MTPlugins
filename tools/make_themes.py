@@ -401,7 +401,7 @@ QMainWindow::separator {{ background-color: {border}; width: 3px; height: 3px; }
 QMainWindow::separator:hover {{ background-color: {accent}; }}
 QLabel, QCheckBox, QRadioButton {{ background-color: transparent; }}
 QFrame[frameShape="4"], QFrame[frameShape="5"] {{ color: {border}; background-color: {border}; }}
-QToolTip {{ background-color: {tip}; color: {tiptext}; border: 1px solid {border}; padding: 3px 5px; }}
+QToolTip {{ background-color: {tip}; color: {tiptext}; border: 1px solid {border}; padding: 0px; }}
 
 QMenuBar {{ background-color: {panel}; border-bottom: 1px solid {border}; }}
 QMenuBar::item {{ background: transparent; padding: 4px 9px; }}

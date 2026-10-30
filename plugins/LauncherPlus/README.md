@@ -4,9 +4,14 @@ Faster builds and a few improvements for the Black Ops III Mod Tools Launcher. T
 
 ## Builds
 
-- Compile with BetterBuild: the compile step runs much faster (a large zombies map went from about 158 to about 45 seconds), with the same output as the stock compiler.
+- Compile with BetterBuild: the compile step runs much faster (a large zombies map went from about 158 to about 36 seconds), with the same output as the stock compiler.
 - Smart compile: when only entities changed since the last compile, only the entities are compiled again (seconds instead of minutes).
 - Link with BetterBuild: faster links, and the localized and sound steps are skipped when their inputs did not change.
+- Map entity cache: the linker rebuilds the map's entity list from the map source (the map and every prefab) on every link; the result is kept and reused while none of those files changed. `cache_map_entities=0` under `[linker]` always rebuilds it.
+- Xpak clean: the linker only ever appends to `zone\<map>.xpak`, so it grows on every link. Once a link has started without one (the first link of a map, or after you delete the xpak by hand) its fresh size is known, and a later link deletes an xpak that has grown to three times that and writes a fresh one. `compact_xpak=0` under `[linker]` keeps it growing.
+- Fastfile content line: after every link the launcher console says whether the fastfile holds the same assets at the same sizes as the last link, or what is new, gone or resized.
+- Localized child: the second linker the main link starts for the language fastfile runs with the same optimizations (its own sound skip and entity cache included) instead of stock code.
+- Skip unchanged builds: a compile or link whose inputs did not change since the last one is skipped (the outputs are already current), and the last link's errors are shown again. `skip_unchanged=0` under `[compile]` or `[linker]` in LauncherPlus.ini always runs them.
 - Light with BetterBuild: faster light bakes, and Low and Medium come out closer to High.
 - Draft in the Light quality box, in front of Low: a fast bake for quick checks.
 - Better auto LODs (off by default, `meshopt_lods=1` under `[linker]` in LauncherPlus.ini turns them on): the linker reduces models with meshoptimizer, much faster than the stock simplifier and with fewer broken LODs. Radiant+ and APE+ preview the same LODs.

@@ -19,6 +19,8 @@
 #include "mip.h"
 #include "localized.h"
 #include "soundskip.h"
+#include "entcache.h"
+#include "../worker/inject.h"
 #include "../../common/meshlod.h"
 
 extern "C" LPVOID AllocateBuffer(LPVOID origin);   // MinHook buffer.c: a 64-byte executable slot within 1 GB
@@ -44,6 +46,8 @@ namespace
         kRaiseAutoLod = 1u << 11,   // auto LOD past the stock 220,000-face cap within a memory budget
         kRepairNormals = 1u << 12,  // auto LOD rebuilds zero or NaN normals instead of failing the LOD
         kMeshoptLod = 1u << 13,     // auto LOD reduced by meshoptimizer instead of the stock simplifier
+        kLinkJournal = 1u << 14,    // write what the link read, missed and wrote to BB_LINK_JOURNAL at exit (skip_unchanged)
+        kEntityCache = 1u << 15,    // reuse the entity string built from map_source while none of its map files changed (entcache.h)
     };
 
     // a patch on decrypted linker code: RVA, expected bytes, bytes to write
@@ -74,7 +78,7 @@ namespace
         { kParallelMip, "parallel_mip" }, { kReuseWic, "reuse_wic" }, { kPrefetchFiles, "prefetch_files" },
         { kFastStat, "fast_stat" }, { kFastRecenter, "fast_recenter" }, { kSkipLocalized, "skip_localized" },
         { kSkipSound, "skip_sound_convert" }, { kRaiseAutoLod, "autolod_fixes (face limit)" },
-        { kRepairNormals, "autolod_fixes (normals)" }, { kMeshoptLod, "meshopt_lods" },
+        { kRepairNormals, "autolod_fixes (normals)" }, { kMeshoptLod, "meshopt_lods" }, { kEntityCache, "cache_map_entities" },
     };
     unsigned g_failed = 0;   // requested code patches whose bytes did not match
 
@@ -337,6 +341,9 @@ namespace
     std::wstring g_listFile;
     std::wstring g_tempDir;   // lower case, from GetTempPathW
     constexpr size_t kMaxListed = 200000;
+    std::unordered_set<std::wstring>* g_missing = nullptr;   // read opens that found no file (kLinkJournal)
+    std::wstring g_journalFile;
+    bool g_journalCut = false;   // a list hit kMaxListed: the journal is written without its "end" line
 
     std::wstring Lower(const wchar_t* s)
     {
@@ -345,12 +352,14 @@ namespace
         return out;
     }
 
-    void Record(const wchar_t* name, DWORD access, DWORD disposition, DWORD flags)
+    void Record(const wchar_t* name, DWORD access, DWORD disposition, DWORD flags, bool found = true)
     {
         if ((flags & FILE_FLAG_BACKUP_SEMANTICS) || !wcsncmp(name, L"\\\\.\\", 4)) return;
         const bool writes = (access & (GENERIC_WRITE | GENERIC_ALL | FILE_WRITE_DATA | FILE_APPEND_DATA | DELETE)) || disposition != OPEN_EXISTING;
         const bool reads = (access & (GENERIC_READ | FILE_READ_DATA)) != 0;
         if (!writes && !reads) return;
+        if (entcache::t_capture && !writes) entcache::t_capture->push_back({ Lower(name), found });   // the map parse's own opens
+        if (!found && (writes || !g_missing)) return;
         std::wstring key = Lower(name);
         // never listed: temp files (the packer stub reads %TEMP%\linker_modtools.exe-<hash>.stored.tmp first) and SQLite databases
         const auto endsWith = [&](const wchar_t* tail) { const size_t n = wcslen(tail); return key.size() >= n && !key.compare(key.size() - n, n, tail); };
@@ -359,17 +368,22 @@ namespace
                          (key[g_tempDir.size()] == L'\\' || key[g_tempDir.size()] == L'/'))))
             return;
         AcquireSRWLockExclusive(&g_recordLock);
-        if (writes) g_written->insert(std::move(key));
-        else if (g_readOrder->size() < kMaxListed && g_readSeen->insert(key).second) g_readOrder->push_back(std::move(key));
+        if (!found) { if (g_missing->size() < kMaxListed) g_missing->insert(std::move(key)); else g_journalCut = true; }
+        else if (writes) g_written->insert(std::move(key));
+        else if (g_readOrder->size() < kMaxListed) { if (g_readSeen->insert(key).second) g_readOrder->push_back(std::move(key)); }
+        else if (!g_readSeen->count(key)) g_journalCut = true;
         ReleaseSRWLockExclusive(&g_recordLock);
     }
+
+    bool NotFound(DWORD error) { return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND; }
 
     HANDLE WINAPI HookCreateFileW(LPCWSTR name, DWORD access, DWORD share, LPSECURITY_ATTRIBUTES sa, DWORD disposition, DWORD flags, HANDLE templ)
     {
         const HANDLE h = g_createFileW(name, access, share, sa, disposition, flags, templ);
-        if (t_prefetcher || !name || h == INVALID_HANDLE_VALUE) return h;
+        if (t_prefetcher || !name) return h;
         const DWORD error = GetLastError();
-        Record(name, access, disposition, flags);
+        if (h != INVALID_HANDLE_VALUE) Record(name, access, disposition, flags);
+        else if (NotFound(error)) Record(name, access, disposition, flags, false);
         SetLastError(error);
         return h;
     }
@@ -378,10 +392,11 @@ namespace
     HANDLE WINAPI HookCreateFileA(LPCSTR name, DWORD access, DWORD share, LPSECURITY_ATTRIBUTES sa, DWORD disposition, DWORD flags, HANDLE templ)
     {
         const HANDLE h = g_createFileA(name, access, share, sa, disposition, flags, templ);
-        if (t_prefetcher || !name || h == INVALID_HANDLE_VALUE) return h;
+        if (t_prefetcher || !name) return h;
         const DWORD error = GetLastError();
         wchar_t wide[MAX_PATH * 2];
-        if (MultiByteToWideChar(CP_ACP, 0, name, -1, wide, MAX_PATH * 2) > 0) Record(wide, access, disposition, flags);
+        if ((h != INVALID_HANDLE_VALUE || NotFound(error)) && MultiByteToWideChar(CP_ACP, 0, name, -1, wide, MAX_PATH * 2) > 0)
+            Record(wide, access, disposition, flags, h != INVALID_HANDLE_VALUE);
         SetLastError(error);
         return h;
     }
@@ -466,6 +481,8 @@ namespace
         {
             size_t at = lower.find_first_not_of(L' ', flag + 11);
             if (at != std::wstring::npos) map = lower.substr(at, lower.find(L' ', at) - at);
+            // the localized child: -modsource -spawnedchild -localized <map>
+            if (!map.empty() && map[0] == L'-') { const size_t end = lower.find_last_not_of(L' '); const size_t sp = lower.find_last_of(L' ', end); map = lower.substr(sp + 1, end - sp); }
         }
         g_mapName = map;
         for (wchar_t& c : map) if (!iswalnum(c) && c != L'_' && c != L'-') c = L'_';
@@ -572,12 +589,43 @@ namespace
         if (!ok || !MoveFileExW(tmp.c_str(), g_listFile.c_str(), MOVEFILE_REPLACE_EXISTING)) DeleteFileW(tmp.c_str());
     }
 
+    // skip_unchanged: "v1", "r <read>", "m <missing>", "w <written>", "end" (left out when a list was cut), UTF-8, tmp + rename
+    void SaveJournal()
+    {
+        if (!g_missing || g_journalFile.empty()) return;
+        t_prefetcher = true;
+        std::string text = "v1\n";
+        auto add = [&](char kind, const std::wstring& p) {
+            const int need = WideCharToMultiByte(CP_UTF8, 0, p.data(), (int)p.size(), nullptr, 0, nullptr, nullptr);
+            text += kind;
+            text += ' ';
+            const size_t at = text.size();
+            text.resize(at + need);
+            WideCharToMultiByte(CP_UTF8, 0, p.data(), (int)p.size(), &text[at], need, nullptr, nullptr);
+            text += '\n';
+        };
+        AcquireSRWLockExclusive(&g_recordLock);
+        for (const std::wstring& p : *g_readOrder) if (!g_written->count(p)) add('r', p);
+        for (const std::wstring& p : *g_missing) if (!g_written->count(p) && !g_readSeen->count(p)) add('m', p);
+        for (const std::wstring& p : *g_written) add('w', p);
+        const bool cut = g_journalCut;
+        ReleaseSRWLockExclusive(&g_recordLock);
+        if (!cut) text += "end\n";
+        const std::wstring tmp = g_journalFile + L".tmp";
+        const HANDLE f = CreateFileW(tmp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr);
+        if (f == INVALID_HANDLE_VALUE) return;
+        DWORD wrote = 0;
+        const bool ok = WriteFile(f, text.data(), (DWORD)text.size(), &wrote, nullptr) && wrote == text.size();
+        CloseHandle(f);
+        if (!ok || !MoveFileExW(tmp.c_str(), g_journalFile.c_str(), MOVEFILE_REPLACE_EXISTING)) DeleteFileW(tmp.c_str());
+    }
+
     using ExitFn = void (__cdecl*)(int);
     ExitFn g_exit = nullptr;
     void __cdecl HookExit(int code)
     {
         static LONG once = 0;
-        if (!InterlockedExchange(&once, 1)) SavePrefetchList();
+        if (!InterlockedExchange(&once, 1)) { SavePrefetchList(); SaveJournal(); }
         g_exit(code);
     }
 
@@ -595,6 +643,14 @@ namespace
     volatile LONG g_statCalls = 0, g_statFast = 0, g_statMismatches = 0, g_statAtimeOnly = 0;
     volatile LONG64 g_statFastTicks = 0, g_statStockTicks = 0;
 
+    // The linker builds its primary lights in a stack struct without writing mAxisFromFx; what the stat call chain left in
+    // that region goes into the fastfile. The stock chain leaves zeros there, so the fast one zeroes the same depth after itself.
+    __declspec(noinline) void ZeroStackBelow()
+    {
+        volatile char pad[32768];
+        SecureZeroMemory(const_cast<char*>(pad), sizeof pad);
+    }
+
     HANDLE WINAPI HookFindFirstFileExW(LPCWSTR name, FINDEX_INFO_LEVELS level, LPVOID data, FINDEX_SEARCH_OPS op, LPVOID filter, DWORD flags)
     {
         if (t_inStat && name && data && !filter && op == FindExSearchNameMatch && (level == FindExInfoStandard || level == FindExInfoBasic) && !wcspbrk(name, L"*?"))
@@ -605,18 +661,16 @@ namespace
                 WIN32_FILE_ATTRIBUTE_DATA a;
                 if (!GetFileAttributesExW(name, GetFileExInfoStandard, &a)) return INVALID_HANDLE_VALUE;
                 WIN32_FIND_DATAW* d = static_cast<WIN32_FIND_DATAW*>(data);
+                memset(d, 0, sizeof *d);
                 d->dwFileAttributes = a.dwFileAttributes;
                 d->ftCreationTime = a.ftCreationTime;
                 d->ftLastAccessTime = a.ftLastAccessTime;
                 d->ftLastWriteTime = a.ftLastWriteTime;
                 d->nFileSizeHigh = a.nFileSizeHigh;
                 d->nFileSizeLow = a.nFileSizeLow;
-                d->dwReserved0 = 0;
-                d->dwReserved1 = 0;
                 size_t tail = n;
                 while (tail && name[tail - 1] != L'\\' && name[tail - 1] != L'/' && name[tail - 1] != L':') --tail;
                 wcscpy_s(d->cFileName, name + tail);
-                d->cAlternateFileName[0] = 0;
                 InterlockedIncrement(&g_statFast);
                 return &g_fakeFindTag;
             }
@@ -639,6 +693,7 @@ namespace
         t_inStat = true;
         int r = g_stat(path, buf);
         t_inStat = false;
+        ZeroStackBelow();
         QueryPerformanceCounter(&t1);
         if (g_patches & kVerify)
         {
@@ -1085,6 +1140,47 @@ namespace
 
     using GetMainArgs = int (__cdecl*)(int*, char***, char***, int, void*);
     GetMainArgs g_getmainargs = nullptr;
+    std::wstring g_stateDir;   // <plugin dir>\linker_state, beside this DLL
+    std::wstring g_selfDll;    // this DLL, injected into the localized child too
+
+    // The localized child (stock: started by the parent through _spawnv) gets this DLL as well: the same patches, its own
+    // sound skip and entity cache. kNotSpawned hands the spawn back to the CRT.
+    intptr_t SpawnChildInjected(const char* path, const char* const* argv)
+    {
+        if (!path || !argv || g_selfDll.empty()) return localized::kNotSpawned;
+        // the CRT's _spawnv adds no quotes: the linker's argv[0] already carries its own ("<exe>")
+        std::string cmd;
+        for (int i = 0; argv[i]; ++i)
+        {
+            const std::string a = argv[i];
+            if (i) cmd += ' ';
+            if (a.empty() || (a[0] != '"' && a.find_first_of(" \t") != std::string::npos)) cmd += '"' + a + '"';
+            else cmd += a;
+        }
+        std::vector<char> buf(cmd.begin(), cmd.end());
+        buf.push_back(0);
+        STARTUPINFOA si = { sizeof si };
+        PROCESS_INFORMATION pi = {};
+        if (!CreateProcessA(path, buf.data(), nullptr, nullptr, TRUE, CREATE_SUSPENDED, nullptr, nullptr, &si, &pi)) return localized::kNotSpawned;
+        const unsigned mode = g_patches & ~(kSkipLocalized | kLinkJournal);
+        if (inject::Install(pi, g_selfDll, "BuildPlusLinkerStart", mode) != 1)
+        {
+            TerminateProcess(pi.hProcess, 1);
+            WaitForSingleObject(pi.hProcess, INFINITE);
+            CloseHandle(pi.hThread);
+            CloseHandle(pi.hProcess);
+            fprintf(stdout, "[BetterBuild] Localized child: injection failed, it runs stock.\n");
+            fflush(stdout);
+            return localized::kNotSpawned;
+        }
+        ResumeThread(pi.hThread);
+        WaitForSingleObject(pi.hProcess, INFINITE);
+        DWORD code = 0;
+        GetExitCodeProcess(pi.hProcess, &code);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        return (intptr_t)(int)code;
+    }
 
     // stdout in the launcher: which optimizations run, which the ini turned off, which could not be applied
     void Announce()
@@ -1092,7 +1188,8 @@ namespace
         const size_t count = sizeof kNames / sizeof kNames[0];
         unsigned active = 0;
         for (const Named& n : kNames) active += (g_patches & n.bit) && !(g_failed & n.bit);
-        fprintf(stdout, "[BetterBuild] %u of %zu linker optimizations active%s:", active, count, (g_patches & kVerify) ? " (verify mode)" : "");
+        const bool child = wcsstr(GetCommandLineW(), L"-spawnedchild") != nullptr;
+        fprintf(stdout, "[BetterBuild] %u of %zu linker optimizations active%s%s:", active, count, child ? " in the localized child" : "", (g_patches & kVerify) ? " (verify mode)" : "");
         for (size_t i = 0, k = 0; i < count; ++i)
             if ((g_patches & kNames[i].bit) && !(g_failed & kNames[i].bit)) fprintf(stdout, "%s %s", k++ ? "," : "", kNames[i].name);
         fprintf(stdout, "%s.\n", active ? "" : " none");
@@ -1127,6 +1224,7 @@ namespace
         }
         if ((g_patches & kParallelMip) && !InstallMip(base)) g_failed |= kParallelMip;
         if ((g_patches & kFastRecenter) && !InstallRecenter(base)) g_failed |= kFastRecenter;
+        if ((g_patches & kEntityCache) && !entcache::Install(base, g_stateDir, (g_patches & kVerify) != 0)) g_failed |= kEntityCache;
         constexpr unsigned kAutoLodBits = kRaiseAutoLod | kRepairNormals | kMeshoptLod;
         if ((g_patches & kAutoLodBits) && !InstallAutoLod(base, (g_patches & kRaiseAutoLod) != 0, (g_patches & kRepairNormals) != 0, (g_patches & kMeshoptLod) != 0))
             g_failed |= g_patches & kAutoLodBits;
@@ -1161,7 +1259,15 @@ extern "C" __declspec(dllexport) DWORD WINAPI BuildPlusLinkerStart(void* arg)
         (!LoadLibraryW(L"d3d11.dll") ||
          MH_CreateHookApi(L"d3d11", "D3D11CreateDevice", reinterpret_cast<LPVOID>(&HookCreateDevice), reinterpret_cast<LPVOID*>(&g_createDevice)) != MH_OK))
         return 0;
-    if (g_patches & kPrefetchFiles)
+    if (g_patches & kLinkJournal)
+    {
+        wchar_t journal[MAX_PATH * 2] = {};
+        const DWORD n = GetEnvironmentVariableW(L"BB_LINK_JOURNAL", journal, MAX_PATH * 2);
+        if (n && n < MAX_PATH * 2) { g_journalFile = journal; g_missing = new std::unordered_set<std::wstring>(); }
+        // the localized child inherits the environment, its own opens are not the parent's journal
+        SetEnvironmentVariableW(L"BB_LINK_JOURNAL", nullptr);
+    }
+    if (g_patches & (kPrefetchFiles | kLinkJournal))
     {
         g_readSeen = new std::unordered_set<std::wstring>();
         g_readOrder = new std::vector<std::wstring>();
@@ -1184,7 +1290,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI BuildPlusLinkerStart(void* arg)
     if (g_patches & kUmbraPoll)
         if (HMODULE winmm = LoadLibraryW(L"winmm.dll"))
             if (auto timeBeginPeriod = reinterpret_cast<UINT (WINAPI*)(UINT)>(GetProcAddress(winmm, "timeBeginPeriod"))) timeBeginPeriod(1);
-    if (g_patches & (kSkipLocalized | kSkipSound))
+    if (g_patches & (kSkipLocalized | kSkipSound | kEntityCache))
     {
         HMODULE self = nullptr;
         wchar_t path[MAX_PATH * 2] = {};
@@ -1194,8 +1300,13 @@ extern "C" __declspec(dllexport) DWORD WINAPI BuildPlusLinkerStart(void* arg)
         if (!n || n >= MAX_PATH * 2) return 0;
         std::wstring dir(path);
         const std::wstring stateDir = dir.substr(0, dir.find_last_of(L"\\/")) + L"\\linker_state";
+        g_stateDir = stateDir;
+        g_selfDll = path;
+        if (g_readSeen) entcache::g_note = [](const std::wstring& p, bool found) { Record(p.c_str(), GENERIC_READ, OPEN_EXISTING, 0, found); };
         if ((g_patches & kSkipLocalized) && !localized::Install(stateDir)) return 0;
         if ((g_patches & kSkipSound) && !soundskip::Install(stateDir)) return 0;
+        if (g_patches & kSkipSound) localized::g_afterChild = &soundskip::RefreshOutputs;
+        if (g_patches & kSkipLocalized) localized::g_spawnChild = &SpawnChildInjected;
     }
     if (MH_CreateHookApi(L"msvcr110", "__getmainargs", reinterpret_cast<LPVOID>(&HookGetMainArgs), reinterpret_cast<LPVOID*>(&g_getmainargs)) != MH_OK)
         return 0;
@@ -1215,6 +1326,8 @@ BOOL WINAPI DllMain(HINSTANCE, DWORD reason, LPVOID)
             fprintf(stderr, "[BetterBuild] WIC verify: %ld direct, %ld stock search, %ld decoder mismatches\n", g_wicFast, g_wicStock, g_wicMismatches);
         if (g_recenterCalls)
             fprintf(stderr, "[BetterBuild] recenter verify: %ld surfaces, %ld fast, %ld mismatches; fast %.0f ms, stock %.0f ms\n", g_recenterCalls, g_recenterFast, g_recenterMismatches, Ms(g_recenterFastTicks), Ms(g_recenterStockTicks));
+        if (entcache::g_verifyRuns)
+            fprintf(stderr, "[BetterBuild] entity cache verify: %ld reused, %ld mismatches\n", entcache::g_verifyRuns, entcache::g_verifyMismatches);
         if (g_statCalls)
         {
             LARGE_INTEGER f; QueryPerformanceFrequency(&f);

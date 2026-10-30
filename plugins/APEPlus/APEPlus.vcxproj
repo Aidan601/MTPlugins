@@ -89,6 +89,7 @@ xcopy /y /i /d "$(ProjectDir)deffiles" "$(SolutionDir)build\$(Configuration)\plu
     <ClCompile Include="filesearch.cpp" />
     <ClCompile Include="vcache.cpp" />
     <ClCompile Include="notesounds.cpp" />
+    <ClCompile Include="notefx.cpp" />
     <ClCompile Include="previewfix.cpp" />
     <ClCompile Include="weaponpreview.cpp" />
     <ClCompile Include="xanimbin.cpp" />
@@ -112,6 +113,7 @@ xcopy /y /i /d "$(ProjectDir)deffiles" "$(SolutionDir)build\$(Configuration)\plu
     <ClInclude Include="filesearch.h" />
     <ClInclude Include="vcache.h" />
     <ClInclude Include="notesounds.h" />
+    <ClInclude Include="notefx.h" />
     <ClInclude Include="previewfix.h" />
     <ClInclude Include="weaponpreview.h" />
     <ClInclude Include="xanimbin.h" />

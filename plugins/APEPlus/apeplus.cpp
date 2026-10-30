@@ -25,6 +25,9 @@
 //     change watcher .......... WatchMain (own std::thread g_watchThread, ReadDirectoryChangesW), Ignored,
 //                               StartWatcher, StopWatcher, g_changed, g_changeCount, g_watchRoot, g_ignore
 //     install / status ........ Install, InstallTrace, Status, TraceReport
+//   namespace reloadbatch ..... Feature 18, a reload that adds many assets (new GDT files): hk_Add (detour of the tree's add
+//                               routine, the completer map swapped for g_emptyMap inside ReloadDeleteAssetDialog), Flush (one merge
+//                               per model after the refresh: TypeNames, Merge, ReleaseStrings), Install, Status, Models
 //   namespace theme ........... Feature 3, the theme picker in View > Preferences (.qss sheets, plugins\APEPlus\themes)
 //     sheet loading ........... Entry (g_list), Widen, Narrow, ReadWhole, StyleDirective, Resolve, Scan
 //     apply ................... SetStyle, SetSheet, HeaderColor, LinkColorFor, RefreshLinkLabels, ApplyLinkColor (g_link, the
@@ -74,6 +77,7 @@
 #include "crashguard.h"
 #include "filesearch.h"
 #include "notesounds.h"
+#include "notefx.h"
 #include "previewfix.h"
 #include "weaponpreview.h"
 #include "discordrpc.h"
@@ -200,6 +204,9 @@ namespace
         void* (*brushCtorColor)(void*, const void*, int) = nullptr;         // QBrush(const QColor&, Qt::BrushStyle)
         void (*brushDtor)(void*) = nullptr;
         void* (*colorCtorRgb)(void*, int, int, int, int) = nullptr;         // QColor(int r, int g, int b, int a)
+        // the reload batch (optional): the asset tree's completer models
+        void* (*slmStringList)(const void*, void*) = nullptr;               // QStringListModel::stringList(), hidden return pointer
+        void (*slmSetStringList)(void*, const void*) = nullptr;             // QStringListModel::setStringList(const QStringList&)
     } qt;
 
     uint64_t Now(); double Ms(uint64_t dt); bool ReadQword(uintptr_t addr, uintptr_t& out);   // defined further down
@@ -289,6 +296,8 @@ namespace
         Get(qt.rxExactMatch, c, "?exactMatch@QRegExp@@QEBA_NAEBVQString@@@Z");
         Get(qt.rxDtor, c, "??1QRegExp@@QEAA@XZ");
         Get(qt.mapNextNode, c, "?nextNode@QMapNodeBase@@QEBAPEBU1@XZ");
+        Get(qt.slmStringList, c, "?stringList@QStringListModel@@QEBA?AVQStringList@@XZ");
+        Get(qt.slmSetStringList, c, "?setStringList@QStringListModel@@QEAAXAEBVQStringList@@@Z");
         Get(qt.timerSingleShot, c, "?singleShot@QTimer@@SAXHPEBVQObject@@PEBD@Z");
         Get(qt.treeItemSelectionChanged, w, "?itemSelectionChanged@QTreeWidget@@QEAAXXZ");
         Get(qt.metaIndexOfSlot, c, "?indexOfSlot@QMetaObject@@QEBAHPEBD@Z");
@@ -1497,6 +1506,183 @@ namespace
         }
     }
 
+    // ---- Feature 18: a reload that adds many assets (new GDT files) updated the completer lists once per asset, minutes for thousands ----
+    namespace reloadbatch
+    {
+        const uintptr_t kAddAsset = 0x140075570;                               // (tree, entry, type index, QTreeWidgetItem** row, bool sorted)
+        const uintptr_t kReloadBegin = 0x14007A040, kReloadEnd = 0x14007B20F;   // ReloadDeleteAssetDialog, the only batch caller
+        const uintptr_t kListAppend = 0x140069470;                             // QList<QString>::append(const QString&)
+        const size_t off_TypeList = 0x30;      // tree: QList<TypeInfo*>, TypeInfo name char* at +0
+        const size_t off_Models = 0x38;        // tree: QMap<QByteArray, QStringListModel*>, key "" = every asset as name.type, else "type1|type2"
+        const size_t off_EntryName = 16, off_EntryType = 32;
+        using AddFn = long long (__fastcall*)(void*, void*, unsigned, void**, int);
+        using AppendFn = void* (__fastcall*)(void*, const void*);
+        AddFn g_orig = nullptr; AppendFn g_append = nullptr;
+        bool g_on = true, g_hooked = false;
+        uintptr_t g_reloadBegin = 0, g_reloadEnd = 0;
+        struct Added { std::string name; int type; };
+        std::vector<Added> g_added; void* g_tree = nullptr, * g_lastTree = nullptr;   // g_lastTree: the tree of the last batch, for "reload models"
+        int g_batches = 0, g_assets = 0, g_lastModels = 0, g_lastStrings = 0; double g_addMs = 0, g_lastAddMs = 0, g_lastMergeMs = 0;
+        // an empty QMapData (ref 1, header.left null): the add routine walks this instead of the real map during a batch
+        struct EmptyMap { int ref = 1; int size = 0; void* p = nullptr; void* left = nullptr; void* right = nullptr; void* mostLeft = nullptr; } g_emptyMap;
+
+        void Flush();
+        long long __fastcall hk_Add(void* tree, void* entry, unsigned type, void** row, int flag)
+        {
+            uintptr_t ret = reinterpret_cast<uintptr_t>(_ReturnAddress());
+            if (!g_on || !entry || ret < g_reloadBegin || ret >= g_reloadEnd) return g_orig(tree, entry, type, row, flag);
+            if (g_tree && g_tree != tree) Flush();
+            void** slot = reinterpret_cast<void**>(static_cast<char*>(tree) + off_Models);
+            void* real = *slot; *slot = &g_emptyMap;
+            uint64_t t0 = Now();
+            long long r = g_orig(tree, entry, type, row, flag);
+            *slot = real;
+            g_addMs += Ms(Now() - t0);
+            const char* name = *reinterpret_cast<const char* const*>(static_cast<char*>(entry) + off_EntryName);
+            g_tree = g_lastTree = tree; g_added.push_back({ name ? name : "", *reinterpret_cast<int*>(static_cast<char*>(entry) + off_EntryType) });
+            return r;
+        }
+        std::vector<std::string> TypeNames(void* tree)
+        {
+            std::vector<std::string> out;
+            QListDataD* d = *reinterpret_cast<QListDataD**>(static_cast<char*>(tree) + off_TypeList);
+            if (!d) return out;
+            for (int i = d->begin; i < d->end; ++i) { const char* const* info = static_cast<const char* const*>(d->array[i]); out.push_back(info && *info ? *info : ""); }
+            return out;
+        }
+        bool Space(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\v' || c == '\f' || c == '\r'; }
+        std::string Trim(const std::string& s) { size_t a = 0, b = s.size(); while (a < b && Space(s[a])) ++a; while (b > a && Space(s[b - 1])) --b; return s.substr(a, b - a); }
+        std::u16string Utf16(const void* qs)
+        {
+            const QArrayDataRaw* s = static_cast<const QArrayDataRaw*>(qs);
+            if (!s || s->size <= 0) return std::u16string();
+            return std::u16string(reinterpret_cast<const char16_t*>(reinterpret_cast<const char*>(s) + s->offset), size_t(s->size));
+        }
+        // QStringList release: the strings go with the last reference (ref 0 = unshared, -1 = static)
+        void ReleaseStrings(QListRaw& l)
+        {
+            QListDataD* d = l.d; l.d = nullptr;
+            if (!d || d->ref == -1) return;
+            if (d->ref == 0 || InterlockedDecrement(reinterpret_cast<volatile long*>(&d->ref)) == 0)
+            {
+                for (int i = d->begin; i < d->end; ++i) qt.qsDtor(&d->array[i]);
+                qt.dispose(d);
+            }
+        }
+        // names the model's list lacks appended once, in order, then one setStringList
+        int Merge(void* model, const std::vector<std::string>& names)
+        {
+            QListRaw list{ nullptr };
+            qt.slmStringList(model, &list);
+            if (!list.d) return 0;
+            std::unordered_set<std::u16string> have; have.reserve(size_t(list.d->end - list.d->begin) + names.size());
+            for (int i = list.d->begin; i < list.d->end; ++i) have.insert(Utf16(list.d->array[i]));
+            int appended = 0;
+            for (const std::string& n : names)
+            {
+                void* qs = nullptr; qt.qstringFromLatin1(&qs, n.c_str(), int(n.size()));
+                if (have.insert(Utf16(qs)).second) { g_append(&list, &qs); ++appended; }
+                qt.qsDtor(&qs);
+            }
+            if (appended) qt.slmSetStringList(model, &list);
+            ReleaseStrings(list);
+            return appended;
+        }
+        // after the refresh: what the add routine would have done per asset, once per completer model
+        void Flush()
+        {
+            if (g_added.empty() || !g_tree) { g_tree = nullptr; return; }
+            std::vector<Added> added; added.swap(g_added); void* tree = g_tree; g_tree = nullptr;
+            ++g_batches; g_assets += int(added.size()); g_lastAddMs = g_addMs; g_addMs = 0;
+            uint64_t t0 = Now(); int models = 0, strings = 0;
+            char* mapD = *reinterpret_cast<char**>(static_cast<char*>(tree) + off_Models);
+            if (mapD && *reinterpret_cast<void**>(mapD + 16))
+            {
+                std::vector<std::string> types = TypeNames(tree);
+                const char* end = mapD + 8;
+                for (const char* node = *reinterpret_cast<const char* const*>(mapD + 32); node && node != end; node = static_cast<const char*>(qt.mapNextNode(node)))
+                {
+                    const QArrayDataRaw* key = *reinterpret_cast<const QArrayDataRaw* const*>(node + 24);
+                    void* model = *reinterpret_cast<void* const*>(node + 32);
+                    if (!model) continue;
+                    std::string k = key && key->size > 0 ? std::string(reinterpret_cast<const char*>(key) + key->offset, size_t(key->size)) : std::string();
+                    std::vector<std::string> names;
+                    if (k.empty()) { for (const Added& a : added) names.push_back(a.name + "." + (a.type >= 0 && size_t(a.type) < types.size() ? types[a.type] : std::string())); }
+                    else
+                    {
+                        std::unordered_set<int> want;
+                        size_t st = 0;
+                        for (;;)
+                        {
+                            size_t c = k.find('|', st);
+                            std::string tok = Trim(k.substr(st, c == std::string::npos ? std::string::npos : c - st));
+                            if (!tok.empty()) for (size_t i = 0; i < types.size(); ++i) if (types[i] == tok) want.insert(int(i));
+                            if (c == std::string::npos) break;
+                            st = c + 1;
+                        }
+                        for (const Added& a : added) if (want.count(a.type)) names.push_back(a.name);
+                    }
+                    if (names.empty()) continue;
+                    int n = Merge(model, names); if (n) { ++models; strings += n; }
+                }
+            }
+            g_lastMergeMs = Ms(Now() - t0); g_lastModels = models; g_lastStrings = strings;
+            rp::Log("reload: %zu assets added in %.0f ms, %d names merged into %d completer lists in %.0f ms", added.size(), g_lastAddMs, strings, models, g_lastMergeMs);
+        }
+        // installed when [reload] batch=1, or later by "reload on"
+        bool Install()
+        {
+            if (g_hooked || !g_on || !rp::Ape()) return g_hooked;
+            void* target = rp::Ape()->ApeAddress(rp::self, kAddAsset);
+            void* append = rp::Ape()->ApeAddress(rp::self, kListAppend);
+            g_reloadBegin = uintptr_t(rp::Ape()->ApeAddress(rp::self, kReloadBegin)); g_reloadEnd = uintptr_t(rp::Ape()->ApeAddress(rp::self, kReloadEnd));
+            if (!target || !append || !g_reloadBegin || !g_reloadEnd) { rp::Log("reload: addresses unavailable, batch off"); return false; }
+            for (void* f : { target, append })
+            {
+                DWORD64 base = 0; PRUNTIME_FUNCTION fn = RtlLookupFunctionEntry(DWORD64(f), &base, nullptr);
+                if (!fn || DWORD64(fn->BeginAddress) + base != DWORD64(f)) { rp::Log("reload: no function starts at %p, batch off", f); return false; }
+            }
+            if (!qt.slmStringList || !qt.slmSetStringList || !qt.mapNextNode || !qt.qstringFromLatin1 || !qt.qsDtor || !qt.dispose) { rp::Log("reload: Qt exports missing, batch off"); return false; }
+            g_emptyMap.mostLeft = &g_emptyMap.p;
+            g_append = reinterpret_cast<AppendFn>(append);
+            if (!rp::host->Detour(rp::self, target, reinterpret_cast<void*>(&hk_Add), reinterpret_cast<void**>(&g_orig))) { rp::Log("reload: detour failed"); return false; }
+            g_hooked = true;
+            rp::Log("reload: batch %s (add routine %p)", g_on ? "on" : "off", target);
+            return true;
+        }
+        std::string Status()
+        {
+            char buf[320];
+            snprintf(buf, sizeof buf, "hooked=%d on=%d batches=%d assets=%d pending=%zu last: add %.0f ms, %d names into %d lists in %.0f ms",
+                     g_hooked ? 1 : 0, g_on ? 1 : 0, g_batches, g_assets, g_added.size(), g_lastAddMs, g_lastStrings, g_lastModels, g_lastMergeMs);
+            return buf;
+        }
+        // "reload models [dump]": the completer lists (key, size), dump writes every string to reload_models.txt next to the plugin
+        std::string Models(bool dump)
+        {
+            void* tree = g_lastTree ? g_lastTree : FindTree();   // the widget FindTree finds is not the object the add routine gets
+            if (!tree || !qt.slmStringList) return "no tree";
+            char* mapD = *reinterpret_cast<char**>(static_cast<char*>(tree) + off_Models);
+            if (!mapD || !*reinterpret_cast<void**>(mapD + 16)) return "no completer lists yet";
+            FILE* f = nullptr;
+            if (dump) { std::wstring path = rp::PluginDir() + L"\\reload_models.txt"; f = _wfopen(path.c_str(), L"wb"); }
+            std::string out; const char* end = mapD + 8;
+            for (const char* node = *reinterpret_cast<const char* const*>(mapD + 32); node && node != end; node = static_cast<const char*>(qt.mapNextNode(node)))
+            {
+                const QArrayDataRaw* key = *reinterpret_cast<const QArrayDataRaw* const*>(node + 24);
+                void* model = *reinterpret_cast<void* const*>(node + 32);
+                std::string k = key && key->size > 0 ? std::string(reinterpret_cast<const char*>(key) + key->offset, size_t(key->size)) : std::string();
+                QListRaw list{ nullptr }; if (model) qt.slmStringList(model, &list);
+                int n = list.d ? list.d->end - list.d->begin : 0;
+                out += "'" + k + "' " + std::to_string(n) + "\n";
+                if (f && list.d) { fprintf(f, "[%s] %d\n", k.c_str(), n); for (int i = list.d->begin; i < list.d->end; ++i) { std::string u = QStringToUtf8(&list.d->array[i]); fprintf(f, "%s\n", u.c_str()); } }
+                ReleaseStrings(list);
+            }
+            if (f) { fclose(f); out += "written to reload_models.txt"; }
+            return out;
+        }
+    }
+
     // ---- Feature 2: the freeze after committing a value, the commit slot 0x140084510 ends in a ~2 s rescan (0x1400F8A70) ----
     namespace commit
     {
@@ -1647,6 +1833,7 @@ namespace
             if (hadChange) { std::lock_guard<std::mutex> lock(g_lastChangeMutex); change = ", disk changed: " + Narrow(g_lastChange); }
             uint64_t t0 = Now();
             g_orig(a, b, c, d);
+            reloadbatch::Flush();
             g_lastRun = Now(); g_lastMs = Ms(g_lastRun - t0); ++g_runs;
             if (g_lastMs > 50.0 || !fromTimer) rp::Log("commit: file scan ran in %.0f ms (%s%s)", g_lastMs, fromTimer ? "commit timer" : "other caller", change.c_str());
         }
@@ -1717,9 +1904,10 @@ namespace
             g_last = now; ++g_frames;
             ba::crashguard::BeforeFrame();
             ba::previewfix::BeforeFrame(widget);
-            ba::weaponpreview::BeforeFrame();
+            ba::weaponpreview::BeforeFrame(widget);
             g_orig(widget, a2);
             ba::previewfix::AfterFrame();   // first: it puts back the attached gun's anim, the weapon preview reads its tags
+            ba::notefx::AfterFrame();       // the note fx anchors on their posed bones, then the fx advance
             ba::weaponpreview::AfterFrame();
         }
         // every QTimer::singleShot in the process passes here, only the frame function's re-queue is changed
@@ -3544,8 +3732,7 @@ namespace
             }
             if (themeedit::Edited()) { current = int(names.size()); AddEditedItem(combo, names); }   // the editor's unsaved edit in effect
             qt.comboSetCurrentIndex(combo, current);
-            ui->SetToolTip(combo, Tip("The look of APE (APE+ plugin). Classic is APE's default, Classic Treyarch is Radiant's stylesheet, Treyarch a modern theme in its colours; "
-                                  "more themes are .qss files in bin\\themes. Picking one applies it.").c_str());
+            ui->SetToolTip(combo, "The look of APE. Themes in bin\\themes are shared with Radiant and the launcher.");
             void* folder = ui->PushButton("Themes Folder", group);
             ui->SetToolTip(folder, Tip("Open bin\\themes (shared with Radiant): drop a .qss file there and reopen Preferences").c_str());
             rp::host->OnClicked(rp::self, folder, OnOpenFolder, nullptr);
@@ -3591,7 +3778,7 @@ namespace
             {
                 for (const char* label : discordrpc::kModeLabels) ui->ComboAdd(discordBox, label);
                 ui->ComboSetCurrent(discordBox, discordrpc::GetMode());
-                ui->SetToolTip(discordBox, Tip("APE+: what your Discord profile shows while APE is in use. Off: nothing. Show the tool: only which tool is open. Show the tool and what is open: also the map, asset or build step. Each tool has its own setting.").c_str());
+                ui->SetToolTip(discordBox, "What your Discord profile shows while APE is open.");
                 ui->BoxAddWidget(discordRow, ui->Label("Discord presence:", group), 0);
                 ui->BoxAddWidget(discordRow, discordBox, 0);
                 ui->BoxAddStretch(discordRow, 1);
@@ -4106,6 +4293,8 @@ namespace
         filt::Install();
         commit::g_minS = rp::ConfigGetInt("commit", "scan_min_s", 10); if (commit::g_minS < 0) commit::g_minS = 0; if (commit::g_minS > 3600) commit::g_minS = 3600;
         commit::Install();
+        reloadbatch::g_on = rp::ConfigGetBool("reload", "batch", true);
+        reloadbatch::Install();
         theme::g_current = rp::ConfigGet("theme", "name", themeicons::kUnset);   // kUnset: the first run, decided on the first tick
         if (theme::g_current != themeicons::kUnset) theme::g_current = themeicons::Renamed(theme::g_current);   // a retired shipped theme -> its successor
         theme::Install();
@@ -4131,6 +4320,7 @@ namespace
         ba::notesounds::Install();
         ba::previewfix::Install();
         ba::weaponpreview::Install();
+        ba::notefx::Install();
         discordrpc::Setup("ape", "APE (Asset Property Editor)");
         return 1;
     }
@@ -4141,6 +4331,7 @@ namespace
         ba::crashguard::Shutdown();
         ba::actionlog::Shutdown();
         ba::colorpicker::Shutdown();
+        ba::notefx::Shutdown();
         ba::notesounds::Shutdown();
         ba::previewfix::Shutdown();
         ba::weaponpreview::Shutdown();
@@ -4208,6 +4399,7 @@ namespace
         if (ba::filesearch::Command(c, reply)) return reply.c_str();
         if (ba::vcache::Command(c, reply)) return reply.c_str();
         if (ba::notesounds::Command(c, reply)) return reply.c_str();
+        if (ba::notefx::Command(c, reply)) return reply.c_str();
         if (ba::previewfix::Command(c, reply)) return reply.c_str();
         if (ba::weaponpreview::Command(c, reply)) return reply.c_str();
         if (discordrpc::Command(c, reply)) return reply.c_str();
@@ -4303,6 +4495,9 @@ namespace
         }
         if (c == "filter audit") { void* tree = FindTree(); reply = tree ? filt::Audit(tree) : "no tree"; return reply.c_str(); }
         if (c == "commit" || c == "commit status") { reply = commit::Status(); return reply.c_str(); }
+        if (c == "reload" || c == "reload status") { reply = reloadbatch::Status(); return reply.c_str(); }
+        if (c == "reload on" || c == "reload off") { reloadbatch::g_on = c == "reload on"; if (reloadbatch::g_on) reloadbatch::Install(); reply = reloadbatch::Status(); return reply.c_str(); }
+        if (c == "reload models" || c == "reload models dump") { reply = reloadbatch::Models(c == "reload models dump"); return reply.c_str(); }
         if (c == "preview") { reply = preview::Status(); return reply.c_str(); }
         if (c.rfind("preview trace ", 0) == 0) { preview::g_trace = atoi(c.substr(14).c_str()); reply = "tracing"; return reply.c_str(); }
         if (c.rfind("preview fps ", 0) == 0)
@@ -4469,7 +4664,7 @@ extern "C" MODTOOLS_PLUGIN_EXPORT const ModToolsPluginApi* ModToolsPluginEntry(M
     api.apiVersion = MODTOOLS_PLUGIN_API_VERSION;
     api.name = "APEPlus";
     api.displayName = "APE+";
-    api.version = "1.1.2";
+    api.version = "1.1.3";
     api.author = "Figglebottom";
     api.description = "QOL fixes and improvements to APE.";
     api.url = "https://github.com/Aidan601/MTPlugins/tree/main/plugins/APEPlus";

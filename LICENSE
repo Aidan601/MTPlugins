@@ -1,3 +1,33 @@
+MTPlugins
+Copyright (C) 2026 Figglebottom
+
+This program is free software: you can redistribute it and/or modify it
+under the terms of the GNU General Public License as published by the
+Free Software Foundation, version 3. The full license text follows the
+additional terms below.
+
+                ADDITIONAL TERMS UNDER SECTION 7 OF THE GNU GPL v3
+
+Under section 7(b) of the GNU General Public License version 3, the
+following attribution requirement is added to this program:
+
+  Any work that includes or is derived from this program, in whole or in
+  part, must give credit to its author, Figglebottom, and to the MTPlugins
+  project (https://github.com/Aidan601/MTPlugins) in a place the users of
+  that work can see: its README or documentation, an About dialog or
+  credits screen, or the page the work is distributed from. The copyright
+  and license notices in the source files must be kept as well.
+
+  This requirement does not apply to the files under sdk/ when they are
+  used only to build a plugin that runs on this program's plugin host.
+  A plugin of your own owes no credit; a copy or a derivative of the host
+  or of the plugins in this repository does.
+
+This requirement applies to copies of this program received under these
+terms. It does not limit any other right the GNU GPL v3 grants you.
+
+=======================================================================
+
                     GNU GENERAL PUBLIC LICENSE
                        Version 3, 29 June 2007
 

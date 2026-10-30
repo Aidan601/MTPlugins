@@ -74,6 +74,7 @@ void LoadConfig(const std::wstring& dllDir)
     if (g_cfg.textBackground < 0) g_cfg.textBackground = 0; if (g_cfg.textBackground > 255) g_cfg.textBackground = 255;
     g_cfg.apeFastGdtScan = GetBool(L"ape", L"fast_gdt_scan", g_cfg.apeFastGdtScan);
     g_cfg.verbose = GetBool(L"log", L"verbose", g_cfg.verbose);
+    g_cfg.freezeMs = GetUInt(L"diag", L"freeze_ms", g_cfg.freezeMs);
 
     LOGW(L"cfg: ini='%s' plugins_dir='%s' isolate=%d maximize=%d fov=%.0f", g_cfg.iniPath.c_str(), g_cfg.pluginsDir.c_str(), g_cfg.isolate, g_cfg.maximize, g_cfg.fovDegrees);
 }

@@ -1,4 +1,4 @@
-// BuildPlusWorker.exe: transparent cod2map64 wrapper started by BuildPlusBridge.dll: --real <cod2map64.exe> -- <compiler arguments>
+// BuildPlusWorker.exe: transparent cod2map64 wrapper started by BuildPlusBridge.dll: [--no-skip] --real <cod2map64.exe> -- <compiler arguments>
 // Output, working directory and exit code are the compiler's own. It runs in a kill-on-close job, so Cancel kills cod2map too.
 #include <windows.h>
 #include <string>
@@ -6,6 +6,7 @@
 #include <cstdio>
 #include "inject.h"
 #include "smartents.h"
+#include "compileskip.h"
 #include "decals.h"
 #include "../../common/physprim.h"
 
@@ -118,6 +119,7 @@ namespace
         bool verify = false;
         bool timing = false;
         bool smartOnlyEnts = true;
+        int skipUnchanged = 0;   // 0 off, 1 on, 2 verify (decide and report, compile anyway)
     };
 
     // One cod2map run: returns its exit code, or a negative value after a wrapper-side failure that Fail() reported.
@@ -214,7 +216,8 @@ namespace
         if (opt.timing && !HasOption(args, L"-timing")) args.insert(args.begin(), L"-timing");
 
         // Smart compile: -onlyents when only entities changed since the last compile of this output (smartents.h).
-        smartents::Plan plan = smartents::Decide(real, args, pluginDir, opt.smartOnlyEnts);
+        const bool skipCheck = opt.skipUnchanged != 0 && opt.patches;
+        smartents::Plan plan = smartents::Decide(real, args, pluginDir, opt.smartOnlyEnts, skipCheck);
         PrimitiveCopy primitives;   // after Decide: the smart compile keys on the user's .map, the compiler reads the copy
         primitives.Prepare(args);
         if (plan.callerOnlyEnts)
@@ -233,6 +236,62 @@ namespace
             }
             return code;
         }
+
+        // Skip unchanged: no cod2map run at all when nothing the last compile read or wrote changed (compileskip.h).
+        compileskip::Job skip;
+        std::string skipWhy;
+        unchanged::State skipOld;
+        if (skipCheck)
+        {
+            skip = compileskip::Prepare(real, pluginDir, plan);
+            if (skip.applicable)
+            {
+                const ULONGLONG t0 = GetTickCount64();
+                size_t checked = 0;
+                skipWhy = compileskip::Decide(skip, checked);
+                const double seconds = (GetTickCount64() - t0) / 1000.0;
+                if (skipWhy.empty() && opt.skipUnchanged == 1)
+                {
+                    snprintf(banner, sizeof banner, "Compile skipped: nothing it reads changed since the last compile (%zu files checked in %.1f s), "
+                             "the BSP and nav mesh are kept. skip_unchanged=0 in LauncherPlus.ini always compiles.", checked, seconds);
+                    Say(banner);
+                    return 0;
+                }
+                const std::string line = skipWhy.empty() ? "Skip unchanged (verify mode): nothing changed, compiling anyway to compare" : "Compile needed: " + skipWhy;
+                snprintf(banner, sizeof banner, "%s (checked in %.1f s).", line.substr(0, 200).c_str(), seconds);
+                Say(banner);
+                if (GetEnvironmentVariableW(L"BB_SKIP_DECIDE_ONLY", nullptr, 0)) return 0;   // tests: the decision only
+                if (skipWhy.empty()) skipOld.Load(skip.statePath);
+                CreateDirectoryW(Parent(skip.statePath).c_str(), nullptr);
+                SetEnvironmentVariableW(L"BB_COMPILE_JOURNAL", skip.journal.c_str());
+            }
+            else
+            {
+                snprintf(banner, sizeof banner, "Skip unchanged: not checked (%s).", skip.reason.substr(0, 200).c_str());
+                Say(banner);
+            }
+        }
+        const std::string bspBefore = smartents::Identity(plan.output);
+        const unsigned long long start = compileskip::Now();
+        auto compile = [&](const std::vector<std::wstring>& a) {
+            if (skip.applicable) DeleteFileW(skip.journal.c_str());
+            return RunCompiler(real, a, opt, pluginDir);
+        };
+        auto finish = [&](int code) {
+            if (!skip.applicable) return code;
+            SetEnvironmentVariableW(L"BB_COMPILE_JOURNAL", nullptr);
+            const std::string kept = compileskip::Remember(skip, bspBefore, start, code);
+            if (skipWhy.empty())
+            {
+                const std::string diff = "Skip unchanged verify: " + compileskip::Compare(skip, skipOld, start) + (kept.empty() ? "." : ", not recorded: " + kept + ".");
+                Say(diff.c_str());
+            }
+            else if (!kept.empty() && code == 0)
+                Say(("Skip unchanged: this compile is not recorded (" + kept + "), the next one runs too.").c_str());
+            DeleteFileW(skip.journal.c_str());
+            return code;
+        };
+
         if (opt.smartOnlyEnts)
         {
             if (plan.onlyEnts)
@@ -244,15 +303,15 @@ namespace
                 keeper.Capture(plan.output);
                 std::vector<std::wstring> quick = args;
                 quick.insert(quick.begin(), L"-onlyents");
-                const int code = RunCompiler(real, quick, opt, pluginDir);
-                if (code < 0) return -code;
+                const int code = compile(quick);
+                if (code < 0) return finish(-code);
                 size_t records = 0;
                 const int restored = code == 0 && !smartents::Identity(plan.output).empty() ? keeper.Restore(plan.output, records) : -1;
                 if (restored >= 0)
                 {
                     if (restored > 0) { snprintf(banner, sizeof banner, "Smart compile: restored the reveal UVs of %zu volume decals that cod2map -onlyents zeroes.", records); Say(banner); }
                     smartents::Remember(plan);
-                    return 0;
+                    return finish(0);
                 }
                 Say(code == 0 ? "Smart compile: the volume decal lump did not come back as expected, compiling fully instead."
                               : "Smart compile: the -onlyents run failed, compiling fully instead.");
@@ -264,14 +323,14 @@ namespace
                 Say(banner);
             }
         }
-        const int code = RunCompiler(real, args, opt, pluginDir);
-        if (code < 0) return -code;
+        const int code = compile(args);
+        if (code < 0) return finish(-code);
         if (plan.applicable)
         {
             if (code == 0) smartents::Remember(plan);
             else smartents::Forget(plan);
         }
-        return code;
+        return finish(code);
     }
 }
 
@@ -279,14 +338,16 @@ int wmain(int argc, wchar_t** argv)
 {
     std::wstring real;
     int separator = -1;
+    bool noSkip = false;   // --no-skip: no skip_unchanged decision and no record (PlayTest's forced and throwaway builds)
     for (int i = 1; i < argc; ++i)
     {
         if (!_wcsicmp(argv[i], L"--real") && i + 1 < argc) { real = argv[++i]; continue; }
+        if (!_wcsicmp(argv[i], L"--no-skip")) { noSkip = true; continue; }
         if (!wcscmp(argv[i], L"--")) { separator = i; break; }
     }
     if (real.empty() || separator < 0)
     {
-        fwprintf(stderr, L"usage: BuildPlusWorker --real <cod2map64.exe> -- <compiler arguments>\n");
+        fwprintf(stderr, L"usage: BuildPlusWorker [--no-skip] --real <cod2map64.exe> -- <compiler arguments>\n");
         return 2;
     }
     std::vector<std::wstring> args(argv + separator + 1, argv + argc);
@@ -301,5 +362,10 @@ int wmain(int argc, wchar_t** argv)
     opt.verify = GetPrivateProfileIntW(L"compile", L"verify_patches", 0, ini.c_str()) != 0;
     opt.timing = GetPrivateProfileIntW(L"compile", L"timing", 0, ini.c_str()) != 0;
     opt.smartOnlyEnts = GetPrivateProfileIntW(L"compile", L"smart_onlyents", 1, ini.c_str()) != 0;
+    {
+        wchar_t value[32] = {};
+        GetPrivateProfileStringW(L"compile", L"skip_unchanged", L"1", value, 32, ini.c_str());
+        opt.skipUnchanged = noSkip ? 0 : !_wcsicmp(value, L"verify") ? 2 : _wtoi(value) ? 1 : 0;
+    }
     return Run(real, std::move(args), opt, pluginDir);
 }

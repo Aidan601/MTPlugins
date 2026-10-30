@@ -24,6 +24,10 @@
     <ClInclude Include="edges.h" />
     <ClInclude Include="subgroups.h" />
     <ClInclude Include="grid_init_impl.h" />
+    <ClInclude Include="collisionleaf.h" />
+    <ClInclude Include="qhullstart.h" />
+    <ClInclude Include="coalescetree.h" />
+    <ClInclude Include="fastheap.h" />
     <ClCompile Include="..\..\..\src\third_party\minhook\src\buffer.c" />
     <ClCompile Include="..\..\..\src\third_party\minhook\src\hook.c" />
     <ClCompile Include="..\..\..\src\third_party\minhook\src\trampoline.c" />

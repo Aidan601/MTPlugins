@@ -21,6 +21,7 @@
 #include "ui.h"
 #include "config.h"
 #include "log.h"
+#include "hangwatch.h"
 
 // MAP (grep the names, line numbers drift):
 //   Radiant function shapes ... Map_LoadFile_t, Map_SaveFile_t, ... (typedefs), the o_* originals, kImportFlags
@@ -621,7 +622,9 @@ namespace
     {
         LOG("hook: Map_SaveFile('%s', autosave=%d, selected=%d)", filename ? filename : "(null)", silentAutosave, saveSelected);
         hooks::BeginOwnWrite();
+        ULONGLONG t0 = GetTickCount64();
         char r = o_Map_SaveFile(filename, silentAutosave, saveSelected);
+        LOG("hook: Map_SaveFile done in %llu ms (result %d)", GetTickCount64() - t0, r);
         hooks::EndOwnWrite();
         // Save As changes the current-map global (not for autosaves): trust it
         std::wstring saved = hooks::CurrentScopePath();
@@ -768,6 +771,7 @@ namespace
         st = MH_EnableHook(target);
         if (st != MH_OK) { LOG("hook: %s MH_EnableHook failed: %s", name, MH_StatusToString(st)); return false; }
         LOG("hook: %s installed at 0x%p", name, target);
+        hangwatch::NameFunction(target, name);
         return true;
     }
 }

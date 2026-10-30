@@ -1940,7 +1940,8 @@ namespace
     // Launcher Plus only hooks modlauncher.exe: Play Test builds use its wrappers directly under the same switches its launcher bridge
     // reads (LauncherPlus row in plugins.ini, [launcherplus] enabled, the tool's enabled= in LauncherPlus.ini, wrappers BuildPlus*.exe,
     // the old plugins\BetterBuild install as fallback). Contract: "<wrapper>" --real "<tool>" -- <args>, the tool's exit code and output, kill-on-close job.
-    bool PlayBetterBuildRoute(std::wstring& exe, std::vector<std::wstring>& args, const wchar_t* section, const wchar_t* wrapperName)
+    // noSkip: the wrapper neither skips nor records the run (skip_unchanged), for forced builds and throwaway zones
+    bool PlayBetterBuildRoute(std::wstring& exe, std::vector<std::wstring>& args, const wchar_t* section, const wchar_t* wrapperName, bool noSkip = false)
     {
         const std::wstring self = PlayThisModuleDir();
         const size_t slash = self.find_last_of(L"\\/");
@@ -1963,6 +1964,7 @@ namespace
             !usable(L"BetterBuild", L"BetterBuild", L"betterbuild", wrapperName, wrapper))
             return false;
         std::vector<std::wstring> wrapped = { L"--real", exe, L"--" };
+        if (noSkip) wrapped.insert(wrapped.begin(), L"--no-skip");
         wrapped.insert(wrapped.end(), args.begin(), args.end());
         exe = wrapper;
         args.swap(wrapped);
@@ -3155,7 +3157,7 @@ namespace
         if (!g_playLanguage.empty()) { args.push_back(L"-language"); args.push_back(PlayUtf8ToWide(g_playLanguage)); }
         args.push_back(L"-modsource"); args.push_back(zoneName);
         std::wstring linkerExe = PlayJoin(PlayJoin(m.toolsRoot, L"bin"), L"linker_modtools.exe");
-        if (PlayBetterBuildRoute(linkerExe, args, L"linker", L"BetterBuildLinker.exe"))
+        if (PlayBetterBuildRoute(linkerExe, args, L"linker", L"BetterBuildLinker.exe", true))
             PlayAppendLog("[BETTERBUILD] Linking the live material zone through BetterBuild.");
         const int rc = PlayRunCaptured(linkerExe, args, m.toolsRoot, "Live materials link");
         const std::wstring outDir = PlayJoin(modRoot, L"zone");
@@ -3243,7 +3245,7 @@ namespace
         {
             std::vector<std::wstring> args = { L"-platform", L"pc", L"-navmesh", L"-navvolume", L"-loadFrom", tempMap, tempBsp };
             std::wstring compiler = cod2map;
-            if (PlayBetterBuildRoute(compiler, args, L"compile", L"BetterBuildWorker.exe")) PlayAppendLog("[NAV] Compiling through BetterBuild.");
+            if (PlayBetterBuildRoute(compiler, args, L"compile", L"BetterBuildWorker.exe", true)) PlayAppendLog("[NAV] Compiling through BetterBuild.");
             if (PlayRunCaptured(compiler, args, PlayJoin(m.toolsRoot, L"bin"), "Nav refresh compile") != 0) r.error = "the compile failed; see the cod2map output above";
             else r.ok = PlayLiveMaterialsLinkZone(m, std::vector<std::string>(), zoneName, r.error, "navmesh," + assetName + "\r\n");
         }
@@ -3753,7 +3755,7 @@ namespace
             args.push_back(L"-loadFrom"); args.push_back(m.mapPath); args.push_back(m.bspPath);
             const char* label = compileMode == PLAY_COMPILE_ONLYENTS ? "Map compile (-onlyents)" : "Map compile (full geometry)";
             std::wstring compiler = cod2map;
-            if (PlayBetterBuildRoute(compiler, args, L"compile", L"BetterBuildWorker.exe"))
+            if (PlayBetterBuildRoute(compiler, args, L"compile", L"BetterBuildWorker.exe", full))
                 PlayAppendLog("[BETTERBUILD] Compiling through BetterBuild (its launcher settings apply).");
             // cwd = <root>\bin like the launcher: cod2map loads bin\default_navmesh_settings.json relative to it, elsewhere it aborts the nav
             // mesh ("Unable to load navigation mesh generation settings").
@@ -3775,7 +3777,7 @@ namespace
             args.push_back(L"-modsource"); args.push_back(m.mapName);
 
             std::wstring linkerExe = linker;
-            if (PlayBetterBuildRoute(linkerExe, args, L"linker", L"BetterBuildLinker.exe"))
+            if (PlayBetterBuildRoute(linkerExe, args, L"linker", L"BetterBuildLinker.exe", full))
                 PlayAppendLog("[BETTERBUILD] Linking through BetterBuild (its launcher settings apply).");
             const uint64_t mainBefore = PlayFileTime(mainFf);
             PlayNote("Linking the fastfile (linker: images, models, sounds, scripts)...");

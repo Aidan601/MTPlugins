@@ -17,6 +17,7 @@
 #include "ape.h"
 #include "qt.h"
 #include "support.h"
+#include "hangwatch.h"
 #include "MinHook.h"
 
 namespace
@@ -138,6 +139,7 @@ namespace
         // Radiant shows a splash first, the main window appears after asset/DB init (APE: gdt.db open + tree build).
         for (int i = 0; i < 480 && !mt::Init(); ++i) WaitForSingleObject(g_shown, 250);
         if (!mt::MainWindow()) LOG("init: main window never appeared; main-thread jobs unavailable");
+        else hangwatch::Start();
 
         if (app::IsRadiant())
         {

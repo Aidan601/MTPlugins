@@ -4,6 +4,7 @@
 #include "actionlog.h"
 #include <windows.h>
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
@@ -117,8 +118,40 @@ namespace
         g_print.push_back(text);
         while (g_print.size() > 200) g_print.pop_front();
     }
-    void WriteReportFile()
+    // ---- report file writer (a slow disk can hold an open for many seconds, so never on the main thread) ----
+    std::atomic<bool> g_writing{false};
+    std::string  g_writeText;                // owned by the writer while g_writing
+    std::wstring g_writePath;
+
+    void WriteText(const std::wstring& path, const std::string& text)
     {
+        std::wstring tmp = path + L".tmp";
+        FILE* f = _wfopen(tmp.c_str(), L"wb");
+        if (!f) return;
+        bool ok = fwrite(text.data(), 1, text.size(), f) == text.size();
+        ok = fclose(f) == 0 && ok;
+        if (ok) MoveFileExW(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING);
+        else DeleteFileW(tmp.c_str());
+    }
+
+    DWORD WINAPI WriterProc(void*)
+    {
+        HMODULE self = nullptr;
+        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, reinterpret_cast<LPCWSTR>(&WriterProc), &self);
+        try { WriteText(g_writePath, g_writeText); } catch (...) {}
+        g_writing = false;
+        if (self) FreeLibraryAndExitThread(self, 0);
+        return 0;
+    }
+
+    void WriteReportFile(bool wait = false)
+    {
+        if (g_writing)
+        {
+            if (!wait) return;                // still dirty, the next tick tries again
+            for (int i = 0; i < 300 && g_writing; ++i) Sleep(10);
+            if (g_writing) return;
+        }
         g_reportDirty = false;
         uint64_t now = GetTickCount64();
         size_t first = g_ring.size();
@@ -131,13 +164,13 @@ namespace
             for (char c : g_ring[i].text) { if (c == '\n') text += "\r\n"; else text += c; }
             text += "\r\n";
         }
-        std::wstring path = ReportPath(), tmp = path + L".tmp";
-        FILE* f = _wfopen(tmp.c_str(), L"wb");
-        if (!f) return;
-        bool ok = fwrite(text.data(), 1, text.size(), f) == text.size();
-        ok = fclose(f) == 0 && ok;
-        if (ok) MoveFileExW(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING);
-        else DeleteFileW(tmp.c_str());
+        if (wait) { WriteText(ReportPath(), text); return; }
+        g_writeText = std::move(text);
+        g_writePath = ReportPath();
+        g_writing = true;
+        HANDLE t = CreateThread(nullptr, 0, &WriterProc, nullptr, 0, nullptr);
+        if (t) { SetThreadPriority(t, THREAD_PRIORITY_BELOW_NORMAL); CloseHandle(t); }
+        else { g_writing = false; g_reportDirty = true; }
     }
 
     // ---- small text helpers ---------------------------------------------------------------------------------------
@@ -999,7 +1032,7 @@ void Tick()
 
 void Shutdown()
 {
-    if (g_inReports && g_reportDirty) WriteReportFile();
+    if (g_inReports && g_reportDirty) WriteReportFile(true);
     g_on = false;
     g_step = Step();
     g_print.clear();

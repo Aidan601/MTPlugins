@@ -8,8 +8,11 @@ namespace ba::notesounds
 void Install();
 // Follows the preview's play position and starts the sounds of the notes it passed. APE main thread, OnTick.
 void Tick();
-// Plays a sound alias that an anim change does not stop (the weapon preview's fire and reload sounds). APE main thread.
-void PlayAlias(const std::string& alias);
+// Plays a sound alias; keep = an anim change does not stop it (the weapon preview's fire and reload sounds). APE main thread.
+void PlayAlias(const std::string& alias, bool keep = true);
+// Starts an alias as a loop (one voice per alias) and stops every voice of an alias: the fx player's follow sounds.
+void PlayAliasLoop(const std::string& alias);
+void StopAliasVoices(const std::string& alias);
 // Sound notes of the anim the preview plays now (GDT sound notes and exported sndnt# notetracks), -1 before one is read.
 int SoundNoteCount();
 // Stops every voice, joins the loader thread and releases XAudio2. Plugin OnUnload.

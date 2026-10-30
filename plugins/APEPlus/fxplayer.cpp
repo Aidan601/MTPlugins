@@ -70,7 +70,7 @@ namespace
     // ---- an element, interpreted ----
     struct Curve { std::vector<float> k; int width = 2; };   // keys of (t, v...) rows
     struct Graph { float scale = 0; Curve a, b; bool set = false; };
-    enum VisType { kNone, kBillboard, kRotated, kOriented, kLine, kTail, kRunner, kCloud, kModel, kOther };
+    enum VisType { kNone, kBillboard, kRotated, kOriented, kLine, kTail, kRunner, kCloud, kModel, kBeamSource, kBeamTarget, kOther };
 
     struct Elem
     {
@@ -86,8 +86,9 @@ namespace
         bool atlasRandom = false, atlasOverLife = false;
         VisType vis = kNone;
         std::vector<std::string> visuals;   // materials or runner effects
+        std::string spawnSound, followSound;   // elemSpawnSound, elemFollowSound aliases
     };
-    struct Effect { std::vector<Elem> elems; std::string error; };
+    struct Effect { std::vector<Elem> elems; std::string error, loopSound; };   // loopSound: efLoopedSound
 
     void ReadPair(const std::vector<Item>& v, float* out)
     {
@@ -186,9 +187,11 @@ namespace
         el.atlasCount = std::max(1, num("atlasEntryCount", 1));
         el.atlasIndex = num("atlasIndex", 0); el.atlasFps = num("atlasFps", 0); el.atlasLoops = num("atlasLoopCount", 0);
         if (auto v = get("atlasBehavior")) { el.atlasRandom = Has(*v, "startRandom"); el.atlasOverLife = Has(*v, "playOverLife"); }
+        auto str = [&](const char* k) { std::string r; if (auto v = get(k)) for (const Item& it : *v) if (it.isGroup) for (const Item& s : it.group) if (!s.isGroup && s.tok.size() > 1 && s.tok[0] == '"') r = s.tok.substr(1); return r; };
+        el.spawnSound = str("elemSpawnSound"); el.followSound = str("elemFollowSound");
         static const std::pair<const char*, VisType> kVis[] = {{"billboardSprite", kBillboard}, {"rotatedSprite", kRotated}, {"orientedSprite", kOriented},
             {"line", kLine}, {"tail", kTail}, {"runner", kRunner}, {"cloud", kCloud}, {"model", kModel}, {"dynamicLight2", kOther}, {"dynamicLight", kOther},
-            {"light", kOther}, {"lensFlare", kOther}, {"decal", kOther}, {"trail", kOther}, {"beamSource", kOther}, {"beamTarget", kOther}};
+            {"light", kOther}, {"lensFlare", kOther}, {"decal", kOther}, {"trail", kOther}, {"beamSource", kBeamSource}, {"beamTarget", kBeamTarget}};
         for (const auto& [k, t] : kVis)
         {
             auto v = get(k);
@@ -211,7 +214,7 @@ namespace
         if (std::find(g_told.begin(), g_told.end(), text) != g_told.end()) return;
         g_told.push_back(text);
         rp::Log("fxplayer: %s", text.c_str());
-        if (rp::Ape()) rp::Ape()->Print(rp::self, ("Weapon preview fx: " + text).c_str());
+        if (rp::Ape()) rp::Ape()->Print(rp::self, ("Preview fx: " + text).c_str());
     }
 
     std::string Normalize(std::string p)
@@ -234,6 +237,13 @@ namespace
         const std::vector<std::string> tk = Tokens(ss.str());
         size_t i = 0;
         while (i < tk.size() && tk[i] != "{") ++i;   // header and the iwfx 3 global block
+        // efLoopedSound { "alias" }; closes the global block, its braces are not an emitter
+        if (i > 0 && i + 2 < tk.size() && tk[i - 1] == "efLoopedSound")
+        {
+            if (tk[i + 1].size() > 1 && tk[i + 1][0] == '"') fx->loopSound = tk[i + 1].substr(1);
+            while (i < tk.size() && tk[i] != "}") ++i;
+            if (i < tk.size()) ++i;
+        }
         while (i < tk.size())
         {
             if (tk[i] != "{") { ++i; continue; }
@@ -311,10 +321,109 @@ namespace
     }
     Xform Identity() { Xform x{}; x.a[0] = x.a[4] = x.a[8] = 1; return x; }
 
+    // ---- beam defs (gdt.db through the resolver), facts: HydraxT8 ----
+    struct Grad { float p[4] = {0, 0.333f, 0.666f, 1}, v[4] = {1, 1, 1, 1}; };
+    struct Wave { float amp[2] = {}, freq[2] = {}, speed[2] = {}; float wStart = 1, wMid = 1, wEnd = 1; int harmonics = 0; Grad ampG, freqG; };
+    struct BeamDef
+    {
+        bool ok = false;
+        std::string material;
+        float startWidth = 0.5f, endWidth = 0.5f, startColor[4] = {1, 1, 1, 1}, endColor[4] = {1, 1, 1, 1};
+        int segments = 16, animLoopMs = 1000;
+        float repeatLen = 0;
+        bool uAlong = true;              // uvMode horizontal: U runs along the beam
+        Wave waves[4];                   // sine, sawtooth, square, triangle
+        float slackMin = 0, slackStart = 0, slackIn = 0, slackDur = 0, slackOut = 0;
+        int slackMode = 0;               // 0 loop, 1 keep, 2 one cycle, 3 keep until attached
+    };
+    BeamField g_beamField = nullptr;
+    std::unordered_map<std::string, std::shared_ptr<BeamDef>> g_beams;
+
+    std::shared_ptr<BeamDef> Beam(const std::string& name)
+    {
+        const std::string key = Lower(name);
+        auto it = g_beams.find(key);
+        if (it != g_beams.end()) return it->second;
+        auto d = std::make_shared<BeamDef>();
+        g_beams[key] = d;
+        std::string v;
+        if (!g_beamField || !g_beamField(name, "material", v)) { Note("beam " + name + " is not in gdt.db, not drawn"); return d; }
+        auto num = [&](const char* k, float def) { std::string s; return g_beamField(name, k, s) && !s.empty() ? float(atof(s.c_str())) : def; };
+        auto vec4 = [&](const char* k, float* out) { std::string s; if (g_beamField(name, k, s) && !s.empty()) sscanf_s(s.c_str(), "%f %f %f %f", out, out + 1, out + 2, out + 3); };
+        d->material = v;
+        d->startWidth = num("startWidth", 0.5f); d->endWidth = num("endWidth", 0.5f);
+        vec4("startColor", d->startColor); vec4("endColor", d->endColor);
+        d->segments = std::clamp(int(num("numSegments", 16)), 1, 100);
+        d->animLoopMs = std::max(1, int(num("msecAnimLoopTime", 1000)));
+        d->repeatLen = num("textureRepeatLength", 0);
+        std::string uv; g_beamField(name, "uvMode", uv); d->uAlong = Lower(uv).find("vertical") == std::string::npos;
+        const char* fam[4] = {"sine", "sawtooth", "square", "triangle"};
+        for (int f = 0; f < 4; ++f)
+        {
+            Wave& w = d->waves[f];
+            const std::string p = fam[f];
+            w.amp[0] = num((p + "AmplitudeX").c_str(), 0); w.amp[1] = num((p + "AmplitudeY").c_str(), 0);
+            w.freq[0] = num((p + "FrequencyX").c_str(), 0); w.freq[1] = num((p + "FrequencyY").c_str(), 0);
+            w.speed[0] = num((p + "SpeedX").c_str(), 0); w.speed[1] = num((p + "SpeedY").c_str(), 0);
+            w.wStart = num((p + "WeightStart").c_str(), 1); w.wMid = num((p + "WeightMid").c_str(), 1); w.wEnd = num((p + "WeightEnd").c_str(), 1);
+            w.harmonics = int(num((p + "Harmonics").c_str(), 0));
+            const char* knots[4] = {"Start", "P1", "P2", "End"};
+            for (int k = 0; k < 4; ++k)
+            {
+                w.ampG.p[k] = num((p + "AmplitudeGradient" + knots[k]).c_str(), w.ampG.p[k]);
+                w.ampG.v[k] = num((p + "AmplitudeGradient" + knots[k] + "Value").c_str(), 1);
+                w.freqG.p[k] = num((p + "FrequencyGradient" + knots[k]).c_str(), w.freqG.p[k]);
+                w.freqG.v[k] = num((p + "FrequencyGradient" + knots[k] + "Value").c_str(), 1);
+            }
+        }
+        d->slackMin = num("slackMinSlack", 0); d->slackStart = num("slackStartTimeMsec", 0); d->slackIn = num("slackEaseInTimeMsec", 0);
+        d->slackDur = num("slackDurationMsec", 0); d->slackOut = num("slackEaseOutTimeMsec", 0);
+        std::string mode; g_beamField(name, "slackLoopMode", mode); mode = Lower(mode);
+        d->slackMode = mode.find("keep") != std::string::npos ? 1 : mode.find("one") != std::string::npos ? 2 : mode.find("stay") != std::string::npos ? 3 : 0;
+        d->ok = true;
+        return d;
+    }
+
+    // the 4-knot gradient at t, linear between knots, flat outside
+    float GradAt(const Grad& g, float t)
+    {
+        if (t <= g.p[0]) return g.v[0];
+        for (int k = 0; k < 3; ++k)
+            if (t <= g.p[k + 1]) { const float span = g.p[k + 1] - g.p[k]; return span > 1e-6f ? g.v[k] + (g.v[k + 1] - g.v[k]) * (t - g.p[k]) / span : g.v[k + 1]; }
+        return g.v[3];
+    }
+    float WaveAt(int family, float phase, int harmonics)   // 0 sine, 1 sawtooth, 2 square, 3 triangle; harmonics 0 = the ideal shape
+    {
+        if (family == 0) return sinf(phase);
+        const int n = harmonics > 0 ? harmonics : 8;
+        float s = 0;
+        if (family == 1) { for (int k = 1; k <= n; ++k) s += sinf(float(k) * phase) / float(k); return s * 2 / 3.1415927f; }
+        if (family == 2) { for (int k = 1; k <= 2 * n; k += 2) s += sinf(float(k) * phase) / float(k); return s * 4 / 3.1415927f; }
+        for (int k = 1, sign = 1; k <= 2 * n; k += 2, sign = -sign) s += float(sign) * sinf(float(k) * phase) / float(k * k);
+        return s * 8 / (3.1415927f * 3.1415927f);
+    }
+    // the slack envelope on the wave weights at beam age ms
+    float SlackAt(const BeamDef& d, float ageMs)
+    {
+        if (d.slackMin >= 1) return 1;
+        const float total = d.slackStart + d.slackIn + d.slackDur + d.slackOut;
+        float a = ageMs;
+        if (d.slackMode == 0 && total > 0) a = fmodf(a, total);
+        if (a < d.slackStart) return d.slackMin;
+        if (a <= d.slackStart + d.slackIn) return d.slackIn > 0 ? d.slackMin + (1 - d.slackMin) * (a - d.slackStart) / d.slackIn : 1;
+        if (d.slackMode == 1 || d.slackMode == 3) return 1;
+        if (a <= d.slackStart + d.slackIn + d.slackDur) return 1;
+        const float o = a - d.slackStart - d.slackIn - d.slackDur;
+        if (o < d.slackOut) return 1 - (1 - d.slackMin) * o / d.slackOut;
+        return d.slackMin;
+    }
+
     struct Inst
     {
         std::shared_ptr<Effect> fx;
-        int anchor = 0;
+        int anchor = 0, owner = 0;
+        int root = 0;                   // the started effect this instance belongs to (a runner's child shares its parent's), beams pair inside it
+        double loopFor = 0.25;          // a looping element spawns this long (a shot effect's flash: a quarter second)
         Xform local = Identity();       // in anchor space (a runner's child)
         double age = 0;
         std::vector<double> next;       // per elem: next looping spawn, or <0 when done
@@ -325,7 +434,7 @@ namespace
     {
         const Elem* el = nullptr;
         std::shared_ptr<Effect> keep;
-        int anchor = 0;
+        int anchor = 0, owner = 0, root = 0;
         Xform local = Identity();       // the instance's frame in anchor space
         Xform spawn{};                  // world frame at spawn (runRelToSpawn / World)
         double age = 0, life = 1;
@@ -338,27 +447,33 @@ namespace
     std::vector<Inst> g_newInsts;       // runner children, joined after the step (g_insts must not grow while it is walked)
     std::vector<Part> g_parts;
     bool g_stepping = false, g_stopPending = false;   // Play and StopAll during Step: staged or deferred
-    Xform g_anchors[4] = {Identity(), Identity(), Identity(), Identity()};
+    Xform g_anchors[kAnchors];          // identity until SetAnchor, set in Install
+    int AnchorIdx(int a) { return a < 0 || a >= kAnchors ? 0 : a; }
     LARGE_INTEGER g_last{}, g_freq{};
     double g_timeScale = 1.0;           // test harness: slow motion
     uint64_t g_played = 0, g_spawned = 0, g_drawn = 0, g_presents = 0;
-    const double kLoopFor = 0.25;       // a looping element of a shot effect spawns this long
+    SoundFn g_sound = nullptr;
+    std::vector<std::string> g_liveSounds;   // follow and looped sound aliases started and not stopped
+    bool g_soundsPaused = false;
 
     void Spawn(Inst& in, const Elem& el, int count);
 
-    void StartInst(const std::shared_ptr<Effect>& fx, int anchor, const Xform& local)
+    int g_nextRoot = 1;
+
+    void StartInst(const std::shared_ptr<Effect>& fx, int anchor, const Xform& local, double loopFor, int owner, int root = 0)
     {
         if (!fx || fx->elems.empty() || g_insts.size() + g_newInsts.size() > 64) return;
-        Inst in; in.fx = fx; in.anchor = anchor; in.local = local;
+        Inst in; in.fx = fx; in.anchor = anchor; in.local = local; in.loopFor = loopFor; in.owner = owner; in.root = root ? root : g_nextRoot++;
         for (const Elem& el : fx->elems) { in.delay.push_back(Range(el.delay) / 1000.0); in.next.push_back(el.eventOnly ? -1 : 0); }
         g_newInsts.push_back(std::move(in));
     }
 
     void Spawn(Inst& in, const Elem& el, int count)
     {
+        if (count > 0 && g_sound && !g_soundsPaused && !el.spawnSound.empty()) g_sound(el.spawnSound, 0);
         for (int n = 0; n < count && g_parts.size() < 4096; ++n)
         {
-            Part p; p.el = &el; p.keep = in.fx; p.anchor = in.anchor; p.local = in.local;
+            Part p; p.el = &el; p.keep = in.fx; p.anchor = in.anchor; p.owner = in.owner; p.root = in.root; p.local = in.local;
             p.life = std::max(0.001, double(Range(el.life)) / 1000.0);
             for (float& r : p.rnd) r = Rand01();
             for (int i = 0; i < 3; ++i) p.pos[i] = Range(el.org[i]);
@@ -380,7 +495,7 @@ namespace
             for (int i = 0; i < 3; ++i) { p.angles[i] = Range(el.angle[i]); p.angVel[i] = Range(el.angleVel[i]); }
             p.roll = Range(el.initialRot);
             p.frame0 = el.atlasRandom ? int(Rand01() * el.atlasCount) % el.atlasCount : el.atlasIndex % el.atlasCount;
-            p.spawn = Compose(in.local, g_anchors[in.anchor & 3]);
+            p.spawn = Compose(in.local, g_anchors[AnchorIdx(in.anchor)]);
             if (el.vis == kRunner)
             {
                 if (!el.visuals.empty())
@@ -388,7 +503,7 @@ namespace
                     const std::string& child = el.visuals[size_t(Rand01() * el.visuals.size()) % el.visuals.size()];
                     Xform l{}; AnglesAxis(p.angles[0], p.angles[1], p.angles[2], l.a);
                     memcpy(l.o, p.pos, sizeof l.o);
-                    StartInst(Load("fx\\" + child + ".efx"), in.anchor, Compose(l, in.local));
+                    StartInst(Load("fx\\" + child + ".efx"), in.anchor, Compose(l, in.local), in.loopFor, in.owner, in.root);
                 }
                 continue;
             }
@@ -400,11 +515,28 @@ namespace
                 ++g_spawned;
                 continue;
             }
+            if (el.vis == kBeamSource || el.vis == kBeamTarget) { g_parts.push_back(std::move(p)); ++g_spawned; continue; }   // drawn as a beam pair
             if (el.vis == kOther || el.vis == kNone || el.visuals.empty()) continue;
             p.tex = Material(el.visuals[size_t(Rand01() * el.visuals.size()) % el.visuals.size()]);
             g_parts.push_back(std::move(p));
             ++g_spawned;
         }
+    }
+
+    // the follow and looped sounds that should play now: started when they appear, stopped when they are gone
+    void SyncSounds()
+    {
+        std::vector<std::string> live;
+        auto add = [&](const std::string& a) { if (!a.empty() && std::find(live.begin(), live.end(), a) == live.end()) live.push_back(a); };
+        if (!g_soundsPaused)
+        {
+            for (const Part& p : g_parts) { add(p.el->followSound); if (p.keep) add(p.keep->loopSound); }
+            for (const Inst& in : g_insts) if (in.fx) add(in.fx->loopSound);
+        }
+        if (!g_sound) { g_liveSounds.swap(live); return; }
+        for (const std::string& a : g_liveSounds) if (std::find(live.begin(), live.end(), a) == live.end()) g_sound(a, 2);
+        for (const std::string& a : live) if (std::find(g_liveSounds.begin(), g_liveSounds.end(), a) == g_liveSounds.end()) g_sound(a, 1);
+        g_liveSounds.swap(live);
     }
 
     void Step(double dt)
@@ -422,7 +554,7 @@ namespace
                 if (in.age < in.delay[e]) { pending = true; continue; }
                 if (!el.looping) { Spawn(in, el, std::max(0, int(std::lround(Range(el.oneShot))))); in.next[e] = -1; continue; }
                 const double since = in.age - in.delay[e];
-                if (since > kLoopFor) { in.next[e] = -1; continue; }
+                if (since > in.loopFor) { in.next[e] = -1; continue; }
                 pending = true;
                 while (in.next[e] <= since)
                 {
@@ -448,6 +580,7 @@ namespace
         g_parts.erase(std::remove_if(g_parts.begin(), g_parts.end(), [](const Part& p) { return p.age >= p.life; }), g_parts.end());
         g_stepping = false;
         if (g_stopPending) { g_stopPending = false; g_insts.clear(); g_newInsts.clear(); g_parts.clear(); }
+        SyncSounds();
     }
 
     // ---- the sprite list ----
@@ -485,6 +618,110 @@ namespace
         }
     }
 
+    void Cross(const float* a, const float* b, float* o) { o[0] = a[1] * b[2] - a[2] * b[1]; o[1] = a[2] * b[0] - a[0] * b[2]; o[2] = a[0] * b[1] - a[1] * b[0]; }
+    bool Normalize(float* v) { const float n = sqrtf(Dot(v, v)); if (n < 1e-6f) return false; for (int i = 0; i < 3; ++i) v[i] /= n; return true; }
+    void PartWorld(const Part& p, float* w)
+    {
+        const Xform frame = p.el->relEffect ? Compose(p.local, g_anchors[AnchorIdx(p.anchor)]) : p.spawn;
+        Apply(frame, p.pos, w);
+        w[2] -= 0.5f * p.grav * float(p.age * p.age);
+    }
+
+    // a camera-facing ribbon between a and b with the widths and colours of its ends, one sprite per segment
+    void Ribbon(std::vector<Sprite>& out, const std::shared_ptr<Tex>& tex, const float* a, const float* b, float wa, float wb, const float* ca, const float* cb, float ua, float ub, bool uAlong)
+    {
+        float ax, ay, az, bx, by, bz;
+        if (!Project(a, ax, ay, az) || !Project(b, bx, by, bz)) return;
+        float px = -(by - ay) * g_cam.ty, py = (bx - ax) * g_cam.tx;
+        const float pl = sqrtf(px * px + py * py);
+        if (pl < 1e-6f) { px = 1; py = 0; } else { px /= pl; py /= pl; }
+        const float ha = wa / az, hb = wb / bz;
+        const float c[4][2] = {{ax - px * ha / g_cam.tx, ay - py * ha / g_cam.ty}, {bx - px * hb / g_cam.tx, by - py * hb / g_cam.ty},
+                               {bx + px * hb / g_cam.tx, by + py * hb / g_cam.ty}, {ax + px * ha / g_cam.tx, ay + py * ha / g_cam.ty}};
+        float uv[4][2] = {{ua, 1.0f}, {ub, 1.0f}, {ub, 0.0f}, {ua, 0.0f}};   // U along the beam, V across
+        if (!uAlong) for (float* q : uv) std::swap(q[0], q[1]);
+        const float* col[4] = {ca, cb, cb, ca};
+        Sprite s; s.z = (az + bz) * 0.5f; s.tex = tex;
+        const int idx[6] = {0, 1, 2, 0, 2, 3};
+        for (int i = 0; i < 6; ++i) { const int k = idx[i]; s.v[i] = Vtx{c[k][0], c[k][1], uv[k][0], uv[k][1], col[k][0], col[k][1], col[k][2], col[k][3], 0.0f}; }
+        out.push_back(std::move(s));
+    }
+
+    // every live beam source paired with the nearest live target of the same started effect (children included), waves as the engine
+    // computes them. A target in another effect is never paired: the engine does not join a source and a target from two effects.
+    void BuildBeams(std::vector<Sprite>& sprites)
+    {
+        std::vector<const Part*> targets;
+        for (const Part& p : g_parts) if (p.el->vis == kBeamTarget) targets.push_back(&p);
+        if (targets.empty()) return;
+        for (const Part& p : g_parts)
+        {
+            if (p.el->vis != kBeamSource || p.el->visuals.empty()) continue;
+            std::shared_ptr<BeamDef> d = Beam(p.el->visuals[0]);
+            if (!d || !d->ok) continue;
+            float a[3]; PartWorld(p, a);
+            const Part* best = nullptr; float bestD = 0;
+            for (const Part* t : targets)
+            {
+                if (t->root != p.root) continue;
+                float w[3]; PartWorld(*t, w);
+                const float dd = (w[0] - a[0]) * (w[0] - a[0]) + (w[1] - a[1]) * (w[1] - a[1]) + (w[2] - a[2]) * (w[2] - a[2]);
+                if (!best || dd < bestD) { best = t; bestD = dd; }
+            }
+            if (!best) continue;
+            float b[3]; PartWorld(*best, b);
+            float fwd[3] = {b[0] - a[0], b[1] - a[1], b[2] - a[2]};
+            const float length = sqrtf(Dot(fwd, fwd));
+            if (length < 0.01f || !Normalize(fwd)) continue;
+            float up[3] = {0, 0, 1}, left[3];
+            if (fabsf(fwd[2]) > 0.99f) { up[0] = 1; up[2] = 0; }
+            Cross(up, fwd, left); Normalize(left); Cross(fwd, left, up); Normalize(up);
+            std::shared_ptr<Tex> tex = Material(d->material);
+            const float age = float(p.age), ageMs = age * 1000.0f;
+            const float slack = SlackAt(*d, ageMs);
+            const int n = d->segments;
+            std::vector<float> pts(size_t(n + 1) * 3);
+            for (int i = 0; i <= n; ++i)
+            {
+                const float t = float(i) / float(n);
+                float* v = &pts[size_t(i) * 3];
+                for (int k = 0; k < 3; ++k) v[k] = a[k] + fwd[k] * length * t;
+                if (i == 0 || i == n) continue;   // the ends stay on their bones
+                float dx = 0, dy = 0;
+                for (int f = 0; f < 4; ++f)
+                {
+                    const Wave& w = d->waves[f];
+                    if (w.amp[0] == 0 && w.amp[1] == 0) continue;
+                    const float weight = (t <= 0.5f ? w.wStart + (w.wMid - w.wStart) * 2 * t : w.wMid + (w.wEnd - w.wMid) * 2 * (t - 0.5f)) * slack;
+                    const float ag = GradAt(w.ampG, t), fg = GradAt(w.freqG, t);
+                    dx += w.amp[0] * ag * weight * WaveAt(f, 6.2831853f * w.freq[0] * fg * (t + w.speed[0] * age), w.harmonics);
+                    dy += w.amp[1] * ag * weight * WaveAt(f, 6.2831853f * w.freq[1] * fg * (t + w.speed[1] * age), w.harmonics);
+                }
+                for (int k = 0; k < 3; ++k) v[k] += up[k] * dx + left[k] * dy;
+            }
+            const float animFrac = float(fmod(p.age * 1000.0, double(d->animLoopMs))) / float(d->animLoopMs);
+            float dist = 0;
+            float boost = tex ? tex->boost : 1.0f;
+            for (int i = 0; i < n; ++i)
+            {
+                const float* p0 = &pts[size_t(i) * 3]; const float* p1 = &pts[size_t(i + 1) * 3];
+                const float seg = sqrtf((p1[0] - p0[0]) * (p1[0] - p0[0]) + (p1[1] - p0[1]) * (p1[1] - p0[1]) + (p1[2] - p0[2]) * (p1[2] - p0[2]));
+                const float t0 = float(i) / float(n), t1 = float(i + 1) / float(n);
+                float c0[4], c1[4];
+                for (int k = 0; k < 4; ++k)
+                {
+                    c0[k] = d->startColor[k] + (d->endColor[k] - d->startColor[k]) * t0;
+                    c1[k] = d->startColor[k] + (d->endColor[k] - d->startColor[k]) * t1;
+                    if (k < 3) { c0[k] *= boost; c1[k] *= boost; }
+                }
+                const float w0 = d->startWidth + (d->endWidth - d->startWidth) * t0, w1 = d->startWidth + (d->endWidth - d->startWidth) * t1;
+                const float u0 = (d->repeatLen > 0 ? dist / d->repeatLen : t0) - animFrac, u1 = (d->repeatLen > 0 ? (dist + seg) / d->repeatLen : t1) - animFrac;
+                Ribbon(sprites, tex, p0, p1, w0, w1, c0, c1, u0, u1, d->uAlong);
+                dist += seg;
+            }
+        }
+    }
+
     std::vector<ModelPart> g_models;    // main thread
     void Build()
     {
@@ -495,7 +732,7 @@ namespace
         {
             const Elem& el = *p.el;
             const float t = float(std::min(1.0, p.age / p.life));
-            const Xform frame = el.relEffect ? Compose(p.local, g_anchors[p.anchor & 3]) : p.spawn;
+            const Xform frame = el.relEffect ? Compose(p.local, g_anchors[AnchorIdx(p.anchor)]) : p.spawn;
             float w[3]; Apply(frame, p.pos, w);
             w[2] -= 0.5f * p.grav * float(p.age * p.age);
             if (p.model)
@@ -579,6 +816,7 @@ namespace
             for (Vtx& v : s.v) v.z = s.z;
             sprites.push_back(std::move(s));
         }
+        BuildBeams(sprites);
         std::sort(sprites.begin(), sprites.end(), [](const Sprite& a, const Sprite& b) { return a.z > b.z; });
         std::vector<Vtx> verts; std::vector<Batch> batches;
         verts.reserve(sprites.size() * 6);
@@ -1036,6 +1274,7 @@ namespace
 
 bool Install()
 {
+    for (Xform& a : g_anchors) a = Identity();
     char exe[MAX_PATH] = {};
     GetModuleFileNameA(nullptr, exe, MAX_PATH);
     g_root = exe; g_root = g_root.substr(0, g_root.find_last_of("\\/")); g_root = g_root.substr(0, g_root.find_last_of("\\/"));
@@ -1079,14 +1318,15 @@ std::vector<std::string> ModelNames(const std::string& path)
 }
 
 void SetResolver(Resolver r) { g_resolver = r; }
+void SetBeamResolver(BeamField r) { g_beamField = r; g_beams.clear(); }
 
-void Play(const std::string& path, int anchor)
+void Play(const std::string& path, int anchor, double loopFor, int owner)
 {
     if (!g_hooked || g_broken || path.empty()) return;
     auto fx = Load(path);
     if (!fx->error.empty()) return;
     ++g_played;
-    StartInst(fx, anchor, Identity());
+    StartInst(fx, anchor, Identity(), loopFor, owner);
     if (g_stepping) return;
     for (Inst& n : g_newInsts) g_insts.push_back(std::move(n));
     g_newInsts.clear();
@@ -1096,10 +1336,35 @@ void StopAll()
 {
     if (g_stepping) { g_stopPending = true; return; }
     g_insts.clear(); g_newInsts.clear(); g_parts.clear(); g_models.clear();
+    SyncSounds();
     ClearDraw();
 }
 
-void SetAnchor(int anchor, const Xform& x) { g_anchors[anchor & 3] = x; }
+void Stop(const std::string& path, int anchor, int owner)
+{
+    if (g_stepping || !g_hooked) return;   // notes fire from the tick, never inside a step
+    const std::string key = path.empty() ? std::string() : Lower(Normalize(path));
+    auto it = key.empty() ? g_effects.end() : g_effects.find(key);
+    std::shared_ptr<Effect> fx = it == g_effects.end() ? nullptr : it->second;
+    if (!key.empty() && !fx) return;
+    auto gone = [&](int o, int a, const std::shared_ptr<Effect>& f) { return o == owner && (anchor < 0 || a == anchor) && (!fx || f == fx); };
+    g_insts.erase(std::remove_if(g_insts.begin(), g_insts.end(), [&](const Inst& i) { return gone(i.owner, i.anchor, i.fx); }), g_insts.end());
+    g_newInsts.erase(std::remove_if(g_newInsts.begin(), g_newInsts.end(), [&](const Inst& i) { return gone(i.owner, i.anchor, i.fx); }), g_newInsts.end());
+    g_parts.erase(std::remove_if(g_parts.begin(), g_parts.end(), [&](const Part& p) { return gone(p.owner, p.anchor, p.keep); }), g_parts.end());
+    SyncSounds();
+    if (g_insts.empty() && g_parts.empty()) { g_models.clear(); ClearDraw(); }
+}
+
+void SetSoundSink(SoundFn fn) { g_sound = fn; }
+
+void PauseSounds(bool paused)
+{
+    if (paused == g_soundsPaused) return;
+    g_soundsPaused = paused;
+    SyncSounds();
+}
+
+void SetAnchor(int anchor, const Xform& x) { g_anchors[AnchorIdx(anchor)] = x; }
 
 void SetCamera(const float origin[3], const float forward[3], const float right[3], const float up[3], float tanY, float tanX, void* hwnd)
 {
@@ -1127,6 +1392,7 @@ void UpdateInner()
     if (g_insts.empty() && g_parts.empty())
     {
         g_models.clear();
+        SyncSounds();
         ClearDraw();
         return;
     }
@@ -1142,7 +1408,7 @@ std::string Dump()
     {
         const Elem& el = *p.el;
         const float t = float(std::min(1.0, p.age / p.life));
-        const Xform frame = el.relEffect ? Compose(p.local, g_anchors[p.anchor & 3]) : p.spawn;
+        const Xform frame = el.relEffect ? Compose(p.local, g_anchors[AnchorIdx(p.anchor)]) : p.spawn;
         float w[3]; Apply(frame, p.pos, w);
         float x = 0, y = 0, z = 0;
         const bool vis = Project(w, x, y, z);
@@ -1159,7 +1425,7 @@ std::string Dump()
 
 void ProbeDepth(int anchor)
 {
-    const Xform& x = g_anchors[anchor & 3];
+    const Xform& x = g_anchors[AnchorIdx(anchor)];
     float px = 0, py = 0, pz = 0;
     Project(x.o, px, py, pz);
     g_probeX = px; g_probeY = py; g_probeZ = pz;

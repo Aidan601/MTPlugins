@@ -44,6 +44,6 @@ Building a new feature or a bigger overhaul of how something works? Make it its 
 
 ## License
 
-MTPlugins is licensed under the GNU General Public License, version 3 (`LICENSE`). MinHook (`src\third_party\minhook`) keeps its BSD 2-clause license.
+MTPlugins is licensed under the GNU General Public License, version 3, with one additional term under its section 7(b): anything that includes or is derived from this code must credit Figglebottom and the MTPlugins project where its users can see it (a README, an About dialog or the download page). Writing your own plugin with the SDK needs no credit; copying or forking the host or the plugins here does. The full text is in `LICENSE`. MinHook (`src\third_party\minhook`) keeps its BSD 2-clause license.
 
 Not affiliated with or endorsed by Activision or Treyarch.

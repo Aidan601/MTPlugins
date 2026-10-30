@@ -545,7 +545,7 @@ namespace pluginmgr
             // plugins are loaded once the main window exists, so their panes join the layout in a stable order
             plugins::Init();
             if (g_dialog) Rebuild();
-            update::StartupCheck();      // plugin updates in every app, the release in the launcher
+            update::StartupCheck();      // plugin updates in every app, the release in the launcher or an editor when no app checked in the last day
             return;
         }
         update::Tick();              // update question and installer start, window or not

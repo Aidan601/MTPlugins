@@ -7,17 +7,28 @@
 namespace ba::fxplayer
 {
 struct Xform { float o[3]; float a[9]; };   // row vectors: world = p * a + o
+const int kAnchors = 64;                      // anchor slots: 0 and 1 the weapon preview's flash and brass, 8 on the notetrack fx
 
 // material -> its colorMap's source image (relative to the BO3 root), its materialType and its atlas grid, false when unknown
 using Resolver = bool (*)(const std::string& material, std::string& image, std::string& materialType, int& cols, int& rows);
 void SetResolver(Resolver r);
+// beam def -> one field of the beam asset (gdt.db), false when there is no such beam
+using BeamField = bool (*)(const std::string& beam, const char* key, std::string& value);
+void SetBeamResolver(BeamField r);
 // Hooks IDXGISwapChain::Present. OnLoad, after the APE address checks.
 bool Install();
 // Unhooks nothing (the host removes detours), releases the GPU objects. Plugin OnUnload.
 void Shutdown();
-// Plays <root>\share\raw\<path> (an .efx) on anchor `anchor`. APE main thread.
-void Play(const std::string& path, int anchor);
+// Plays <root>\share\raw\<path> (an .efx) on anchor `anchor`; its looping elements spawn for loopFor seconds. APE main thread.
+void Play(const std::string& path, int anchor, double loopFor = 0.25, int owner = 0);
 void StopAll();
+// Stops the owner's instances of an effect (empty path = all of them) on an anchor (-1 = any) with their particles.
+void Stop(const std::string& path, int anchor, int owner);
+// The effects' sounds: elemSpawnSound at a spawn (mode 0), elemFollowSound and efLoopedSound while particles live (1 start, 2 stop).
+using SoundFn = void (*)(const std::string& alias, int mode);
+void SetSoundSink(SoundFn fn);
+// Paused: the loops stop and nothing starts, the particles keep their place. Resumed: the live loops start again.
+void PauseSounds(bool paused);
 // The anchor's transform for this frame (tag_flash of the gun). APE main thread.
 void SetAnchor(int anchor, const Xform& x);
 // The preview camera of this frame (camera origin, three axes, tan of the half height and width) and its window.

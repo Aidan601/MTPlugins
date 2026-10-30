@@ -29,6 +29,9 @@ struct Config
     // [log]
     bool     verbose        = false;
 
+    // [diag]
+    unsigned freezeMs       = 1000;    // log main-thread stalls this long and longer with stack samples, 0 = off (src/hangwatch.cpp)
+
     std::wstring dllDir;               // directory the host DLL was loaded from
     std::wstring iniPath;
 };

@@ -4,7 +4,7 @@
 ; The launcher's update runs it as /SILENT /RELAUNCH=1: previous folder, plugins and tasks, then the launcher again.
 
 #ifndef AppVersion
-  #define AppVersion "1.1.2"
+  #define AppVersion "1.1.3"
 #endif
 #define Bin "..\build\Release"
 #if FileExists(AddBackslash(SourcePath) + "..\LICENSE")
@@ -145,6 +145,9 @@ Source: "..\plugins\PlayTest\PlayTest.ini"; DestName: "template-PlayTest.ini"; F
 [Run]
 ; the launcher's silent update opens the launcher again, not elevated
 Filename: "{app}\bin\modlauncher.exe"; WorkingDir: "{app}\bin"; Flags: nowait postinstall skipifnotsilent runasoriginaluser; Check: Relaunch
+; an update started from Radiant or APE (no Launcher+) reopens that editor
+Filename: "{app}\bin\Radiant_modtools.exe"; WorkingDir: "{app}\bin"; Flags: nowait postinstall skipifnotsilent runasoriginaluser; Check: RelaunchEditor('radiant', 'Radiant_modtools.exe')
+Filename: "{app}\bin\asseteditor_modtools.exe"; WorkingDir: "{app}\bin"; Flags: nowait postinstall skipifnotsilent runasoriginaluser; Check: RelaunchEditor('ape', 'asseteditor_modtools.exe')
 
 [INI]
 ; the loader loads the installed host
@@ -271,6 +274,11 @@ end;
 function Relaunch(): Boolean;
 begin
   Result := (ExpandConstant('{param:RELAUNCH|0}') = '1') and FileExists(ExpandConstant('{app}\bin\modlauncher.exe'));
+end;
+
+function RelaunchEditor(Value, Exe: String): Boolean;
+begin
+  Result := (CompareText(ExpandConstant('{param:RELAUNCH|0}'), Value) = 0) and FileExists(ExpandConstant('{app}\bin\' + Exe));
 end;
 
 function KeepSetup(): Boolean;

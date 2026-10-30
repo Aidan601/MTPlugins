@@ -748,7 +748,7 @@ namespace
             for (size_t i = 0; i < nb && i < 1024 && bi < 0; ++i) if (StrIs(bv[0] + i * kBoneSize, tag, tagLen)) bi = int(i);
             if (bi < 0) return false;
             void* anim = *reinterpret_cast<void**>(inst + kInstAnim);
-            if (anim && !FullOffsets(anim)) anim = nullptr;
+            const bool full = anim && FullOffsets(anim);   // else the keys are minus the bind offset, as APE's local pose adds it back
             const float t = *reinterpret_cast<const float*>(inst + kInstT);
             Xform acc{}; acc.a[0] = acc.a[4] = acc.a[8] = 1;
             for (int guard = 0; bi >= 0 && size_t(bi) < nb && guard < 64; ++guard)
@@ -759,7 +759,11 @@ namespace
                 const int parent = *reinterpret_cast<const int*>(bone + kBoneParent);
                 Xform l{};
                 const int part = anim ? PartIndexRaw(anim, bn, bl) : -1;
-                if (part < 0 || !PartLocal(anim, part, t, l))
+                if (part >= 0 && PartLocal(anim, part, t, l))
+                {
+                    if (!full) { const float* off = reinterpret_cast<const float*>(bone + kBoneOffset); for (int k = 0; k < 3; ++k) l.o[k] += off[k]; }
+                }
+                else
                 {
                     Xform b{}, pb{};
                     if (!BindXform(model, int(nr) + bi, b) || !BindXform(model, parent >= 0 ? int(nr) + parent : 0, pb)) return false;
@@ -1136,6 +1140,18 @@ std::string BoneList(void* entry, void* animOrNull)
     std::vector<char> buf(4096);
     BoneListRaw(model, animOrNull, buf.data(), buf.size());
     return buf.data();
+}
+
+bool AnimTagWorld(void* entry, const char* tag, float* out12)
+{
+    uint8_t* e = static_cast<uint8_t*>(entry);
+    if (!e || !tag || !ModelReady(e)) return false;
+    Xform x{};
+    if (AnimTagWorldRaw(e, tag, strlen(tag), x)) { memcpy(out12, &x, sizeof x); return true; }
+    uint8_t* model = ModelOf(e);
+    bool isRoot = false;
+    if (!model || (_stricmp(tag, "tag_origin") != 0 && (BoneIndex(model, tag, &isRoot) < 0 || !isRoot))) return false;
+    return TagWorld(entry, tag, out12);   // a root bone: its bind on the placement
 }
 
 bool TagWorld(void* entry, const char* tag, float* out12)

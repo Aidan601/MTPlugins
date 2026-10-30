@@ -385,6 +385,28 @@ namespace
     struct Note { const char* release; const char* plugin; uint32_t apps; const char* html; };
     const uint32_t kAllApps = MODTOOLS_APP_RADIANT | MODTOOLS_APP_APE | MODTOOLS_APP_LAUNCHER;
     const Note kNotes[] = {
+        // ---- 1.1.3 ----
+        { "1.1.3", nullptr, MODTOOLS_APP_RADIANT | MODTOOLS_APP_APE,
+          "<b>Problem reports</b><br>When Radiant or APE stops responding for a few seconds, the report now records where it froze, so freezes can be fixed from your reports." },
+        { "1.1.3", nullptr, MODTOOLS_APP_RADIANT | MODTOOLS_APP_APE,
+          "<b>Updates</b><br>Radiant and APE now offer MTPlugins updates themselves when you start them without the Mod Tools Launcher (once a day). The editor closes (asking you to save) and opens again when the update is done." },
+        { "1.1.3", "RadiantPlus", MODTOOLS_APP_RADIANT,
+          "<b>Radiant+</b><ul>"
+          "<li>Saving in APE no longer freezes Radiant. Radiant reloads the GDT database once per save instead of once per write, and clears the old copy in the background.</li>"
+          "<li>Fixed Radiant freezing for up to a minute on slow drives when opening an asset or while the action log wrote its report copy.</li></ul>" },
+        { "1.1.3", "APEPlus", MODTOOLS_APP_APE,
+          "<b>APE+</b><ul>"
+          "<li>The Preview window plays an animation's fx notetracks (Play Fx, Stop Fx, Kill Fx) on the bone they name, with the effects' own sounds. Sprites and beams only; lights, decals and trails are left out.</li>"
+          "<li>Adding many new GDT files at once no longer freezes APE for minutes.</li></ul>" },
+        { "1.1.3", "LauncherPlus", MODTOOLS_APP_LAUNCHER,
+          "<b>Launcher+</b><ul>"
+          "<li>Compiles and links are skipped when nothing they read changed since the last build, and the last link's errors are shown again. <code>skip_unchanged=0</code> under <code>[compile]</code> or <code>[linker]</code> in LauncherPlus.ini always runs them.</li>"
+          "<li>Compile with BetterBuild is about 10% faster again: the collision and coalesce stages and the compiler's memory allocator were reworked. The output is unchanged, checked on 60 maps.</li>"
+          "<li>Faster links: the map's entity list, rebuilt from the map and every prefab on each link, is reused while none of them changed.</li>"
+          "<li>The <code>zone\\&lt;map&gt;.xpak</code> file only ever grows. Once it is three times its fresh size, the next link rebuilds it from scratch.</li>"
+          "<li>The linker for the language fastfile now runs with the same optimizations as the main one.</li>"
+          "<li>Fixed BetterBuild links failing with \"Missing source checksum\" on a sound nobody touched.</li>"
+          "<li>Fixed missing assets in game when a language xpak had been deleted. Skip localized now rebuilds it.</li></ul>" },
         // ---- 1.1.2 ----
         { "1.1.2", nullptr, MODTOOLS_APP_LAUNCHER,
           "<b>Updates</b><br>Updating MTPlugins now installs without the Setup wizard and reopens the launcher. Your plugin settings are kept and new ones are added." },

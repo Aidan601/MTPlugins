@@ -20,6 +20,8 @@ void SetFree(void* entry, const float* xform12);
 void ClearFree();
 // A tag of the entry's model in world space: its bind transform on the model's current placement (origin, three axis rows).
 bool TagWorld(void* entry, const char* tag, float* out12);
+// The same tag as the entry's anim poses it this frame (bind where the anim has no track); tag_origin and root bones = the placement.
+bool AnimTagWorld(void* entry, const char* tag, float* out12);
 // Test harness: the entry model's bone names, roots marked, * where `anim` has a part of that name.
 std::string BoneList(void* entry, void* animOrNull);
 // Test harness: the first bones of the entry model with their parent field.

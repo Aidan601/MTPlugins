@@ -186,6 +186,7 @@ namespace smartents
     struct Signature
     {
         Sha256 sha;
+        Sha256 all;                   // every entity, for skip_unchanged (compileskip.h)
         std::wstring mapSourceRoot;   // <root>\map_source\ (prefab "model" values are relative to it)
         std::vector<std::string> seeds;
         std::set<std::wstring> visiting;
@@ -200,8 +201,11 @@ namespace smartents
         void HashConfig(const std::wstring& path)
         {
             std::string text;
-            if (ReadWhole(path, text)) { sha.Add("config " + Narrow(Lower(path))); sha.Add(text); }
-            else sha.Add("no config " + Narrow(Lower(path)));
+            for (Sha256* h : { &sha, &all })
+            {
+                if (ReadWhole(path, text)) { h->Add("config " + Narrow(Lower(path))); h->Add(text); }
+                else h->Add("no config " + Narrow(Lower(path)));
+            }
         }
         std::string failure;          // set when a file could not be read or parsed: no signature, full compile
         int files = 0, geometry = 0, points = 0;
@@ -215,7 +219,7 @@ namespace smartents
             if (!ReadWhole(path, text))
             {
                 // cod2map compiles without a missing prefab, the reference is in the parent's entity text anyway
-                if (depth > 0 && GetLastError() == ERROR_FILE_NOT_FOUND) { sha.Add("missing " + Narrow(key)); return; }
+                if (depth > 0 && GetLastError() == ERROR_FILE_NOT_FOUND) { sha.Add("missing " + Narrow(key)); all.Add("missing " + Narrow(key)); return; }
                 failure = "cannot read " + Narrow(path);
                 return;
             }
@@ -224,8 +228,14 @@ namespace smartents
             visiting.insert(key);
             ++files;
             sha.Add("file " + Narrow(key));
+            all.Add("file " + Narrow(key));
             for (const Entity& ent : entities)
             {
+                // entity text minus carriage returns (a CRLF/LF resave must not force a full compile)
+                std::string body;
+                body.reserve(ent.end - ent.begin);
+                for (size_t i = ent.begin; i < ent.end; ++i) if (text[i] != '\r') body += text[i];
+                all.Add(body);
                 const bool prefab = !_stricmp(ent.classname.c_str(), "misc_prefab");
                 // a misc_model with "bake" set is baked into the nav mesh input, so it counts as geometry
                 const bool baked = !_stricmp(ent.classname.c_str(), "misc_model") && atoi(Value(text, ent, "bake").c_str()) != 0;
@@ -233,10 +243,6 @@ namespace smartents
                 const bool decal = !_stricmp(ent.classname.c_str(), "misc_volume_decal");
                 if (!ent.nested && !prefab && !baked && !decal && !IsSeedClass(ent.classname)) { ++points; continue; }
                 ++geometry;
-                // entity text minus carriage returns (a CRLF/LF resave must not force a full compile)
-                std::string body;
-                body.reserve(ent.end - ent.begin);
-                for (size_t i = ent.begin; i < ent.end; ++i) if (text[i] != '\r') body += text[i];
                 sha.Add(body);
                 if (prefab)
                 {
@@ -293,6 +299,7 @@ namespace smartents
         bool onlyEnts = false;          // the decision
         std::string reason;             // why (for the launcher log)
         std::string signature;
+        std::string fullSignature;      // every entity too (skip_unchanged)
         std::wstring map, output, navmesh, navvolume, statePath;
     };
 
@@ -309,8 +316,9 @@ namespace smartents
         return dot != std::wstring::npos && (slash == std::wstring::npos || dot > slash) ? p.substr(0, dot) : p;
     }
 
-    // real = <root>\bin\cod2map64.exe, args = the launcher's compiler arguments. With enabled=false only the command line is parsed.
-    inline Plan Decide(const std::wstring& real, const std::vector<std::wstring>& args, const std::wstring& pluginDir, bool enabled)
+    // real = <root>\bin\cod2map64.exe, args = the launcher's compiler arguments. With enabled=false no -onlyents decision,
+    // with full=false too no signatures (only the command line is parsed).
+    inline Plan Decide(const std::wstring& real, const std::vector<std::wstring>& args, const std::wstring& pluginDir, bool enabled, bool full = false)
     {
         Plan plan;
         for (size_t i = 0; i < args.size(); ++i)
@@ -327,7 +335,7 @@ namespace smartents
         plan.navmesh = StripExt(plan.output) + L"_navmesh.hkt";
         plan.navvolume = StripExt(plan.output) + L"_navvolume.hkt";
         if (plan.callerOnlyEnts) { plan.reason = "the caller already asked for -onlyents"; return plan; }
-        if (!enabled) { plan.reason = "off in LauncherPlus.ini"; return plan; }
+        if (!enabled && !full) { plan.reason = "off in LauncherPlus.ini"; return plan; }
         plan.applicable = true;
 
         std::wstring bin = real.substr(0, real.find_last_of(L"\\/"));
@@ -335,7 +343,8 @@ namespace smartents
         Signature sig;
         sig.mapSourceRoot = root + L"\\map_source\\";
         sig.sha.Add("buildplus smart compile v1");
-        for (const std::wstring& a : args) sig.sha.Add("arg " + Narrow(Lower(a)));
+        sig.all.Add("buildplus full compile v1");
+        for (const std::wstring& a : args) { sig.sha.Add("arg " + Narrow(Lower(a))); sig.all.Add("arg " + Narrow(Lower(a))); }
         // the nav mesh generator's inputs besides the map: settings (bin\, per-map override) and the entity class lists
         {
             std::string navJson;
@@ -350,7 +359,8 @@ namespace smartents
         sig.HashMap(plan.map, 0);
         if (!sig.failure.empty()) { plan.applicable = false; plan.reason = sig.failure; return plan; }
         plan.signature = sig.sha.Hex();
-        if (plan.signature.empty()) { plan.applicable = false; plan.reason = "SHA-256 unavailable"; return plan; }
+        plan.fullSignature = sig.all.Hex();
+        if (plan.signature.empty() || plan.fullSignature.empty()) { plan.applicable = false; plan.reason = "SHA-256 unavailable"; return plan; }
 
         {
             Sha256 name;
@@ -358,6 +368,7 @@ namespace smartents
             name.Add(key.data(), key.size());
             plan.statePath = pluginDir + L"\\compile_state\\" + Widen(name.Hex().substr(0, 24)) + L".txt";
         }
+        if (!enabled) { plan.applicable = false; plan.reason = "off in LauncherPlus.ini"; return plan; }
         State previous;
         if (!previous.Load(plan.statePath)) { plan.reason = "first compile of this map through BetterBuild"; return plan; }
         if (previous.signature != plan.signature) { plan.reason = "brushes, patches, prefabs or player starts changed"; return plan; }

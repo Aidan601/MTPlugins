@@ -334,6 +334,16 @@ namespace
         return !image.empty();
     }
 
+    int g_beamType = -2;
+    bool ResolveBeam(const std::string& beam, const char* key, std::string& value)
+    {
+        if (g_beamType == -2) g_beamType = TypeIndex("beam");
+        uint8_t* b = Find(beam, g_beamType);
+        if (!b) return false;
+        value = Field(b, key);
+        return true;
+    }
+
     bool IsShell(uint8_t* entry);
     uint8_t* GunEntry()
     {
@@ -1131,9 +1141,19 @@ namespace
     }
 
     // APE's 65 degree view is 16:9 high: a pane narrower than 16:9 loses the sides, so the weapon preview fits 16:9 into the pane
+    void* g_frameWidget = nullptr;       // apePreviewWidget from the frame hook: the fx camera's window when no weapon was dispatched
+
     void* hk_ViewOf(int* cam, float* out, float fov)
     {
-        if (!g_weapon || g_sceneAnim.empty()) return g_origViewOf(cam, out, fov);
+        if (!g_weapon || g_sceneAnim.empty())
+        {
+            void* r = g_origViewOf(cam, out, fov);
+            const float right[3] = {-out[6], -out[7], -out[8]};
+            void* widget = g_widget ? g_widget : g_frameWidget;
+            void* hwnd = g_winId && widget ? reinterpret_cast<void*>(g_winId(widget)) : nullptr;
+            ba::fxplayer::SetCamera(out, out + 3, right, out + 9, out[12], out[13], hwnd);
+            return r;
+        }
         const float use = g_sceneFirstPerson ? g_fov1p : fov;
         void* r = g_origViewOf(cam, out, use);
         const float w = float(cam[0]), h = float(cam[1]);
@@ -1287,11 +1307,13 @@ void Install()
     else rp::Log("weaponpreview: off (enabled=0), no hooks installed");
 }
 
-// the APE detours and the fx player, only while the feature is on (enabled=1, or "weaponpreview on")
-static void InstallHooks()
+static bool g_apiTried = false, g_apiFound = false, g_viewHooked = false, g_fxTried = false, g_fxReady = false;
+
+// APE's functions and globals the preview code calls, resolved once
+static bool ResolveApi()
 {
-    if (g_ready || g_hooksTried) return;
-    g_hooksTried = true;
+    if (g_apiTried) return g_apiFound;
+    g_apiTried = true;
     void* dispatch = Ape(kDispatch);
     void* rawGet = Ape(kRawGet);
     void* viewOf = Ape(kViewOf);
@@ -1307,16 +1329,45 @@ static void InstallHooks()
     g_clock = ResolveClock();
     g_attach = reinterpret_cast<AttachFn>(Ape(kAttach));
     if (HMODULE qw = GetModuleHandleW(L"Qt5Widgets64r.dll")) g_winId = reinterpret_cast<decltype(g_winId)>(GetProcAddress(qw, "?effectiveWinId@QWidget@@QEBA_KXZ"));
-    const bool found = StartsFunction(dispatch) && StartsFunction(rawGet) && StartsFunction(viewOf) && StartsFunction(reinterpret_cast<void*>(g_assign))
-                    && StartsFunction(reinterpret_cast<void*>(g_intern)) && StartsFunction(reinterpret_cast<void*>(g_typeIndex))
-                    && StartsFunction(reinterpret_cast<void*>(g_field)) && StartsFunction(reinterpret_cast<void*>(g_lookup))
-                    && StartsFunction(reinterpret_cast<void*>(g_length)) && StartsFunction(reinterpret_cast<void*>(g_setAnim))
-                    && g_db && g_opts && g_clock;
+    g_apiFound = StartsFunction(dispatch) && StartsFunction(rawGet) && StartsFunction(viewOf) && StartsFunction(reinterpret_cast<void*>(g_assign))
+              && StartsFunction(reinterpret_cast<void*>(g_intern)) && StartsFunction(reinterpret_cast<void*>(g_typeIndex))
+              && StartsFunction(reinterpret_cast<void*>(g_field)) && StartsFunction(reinterpret_cast<void*>(g_lookup))
+              && StartsFunction(reinterpret_cast<void*>(g_length)) && StartsFunction(reinterpret_cast<void*>(g_setAnim))
+              && g_db && g_opts && g_clock;
+    return g_apiFound;
+}
+
+// the camera detour feeds the fx player every frame; one detour for the weapon preview and the notetrack fx
+static bool HookView()
+{
+    if (g_viewHooked) return true;
+    if (!ResolveApi()) return false;
+    g_viewHooked = rp::host->Detour(rp::self, Ape(kViewOf), reinterpret_cast<void*>(&hk_ViewOf), reinterpret_cast<void**>(&g_origViewOf)) != 0;
+    return g_viewHooked;
+}
+
+bool EnsureFx()
+{
+    if (g_fxTried) return g_fxReady;
+    g_fxTried = true;
+    if (!HookView()) { rp::Log("weaponpreview: %s, no fx player", g_apiFound ? "camera detour FAILED" : "APE binary not recognised"); return false; }
+    ba::fxplayer::SetResolver(&ResolveMaterial);
+    ba::fxplayer::SetBeamResolver(&ResolveBeam);
+    g_fxReady = ba::fxplayer::Install();
+    return g_fxReady;
+}
+
+// the APE detours and the fx player, only while the feature is on (enabled=1, or "weaponpreview on")
+static void InstallHooks()
+{
+    if (g_ready || g_hooksTried) return;
+    g_hooksTried = true;
+    const bool found = ResolveApi();
     if (found)
-        g_ready = rp::host->Detour(rp::self, dispatch, reinterpret_cast<void*>(&hk_Dispatch), reinterpret_cast<void**>(&g_origDispatch))
-               && rp::host->Detour(rp::self, rawGet, reinterpret_cast<void*>(&hk_RawGet), reinterpret_cast<void**>(&g_origRawGet))
-               && rp::host->Detour(rp::self, viewOf, reinterpret_cast<void*>(&hk_ViewOf), reinterpret_cast<void**>(&g_origViewOf));
-    if (g_ready && g_fxOn) { ba::fxplayer::SetResolver(&ResolveMaterial); ba::fxplayer::Install(); }
+        g_ready = HookView()
+               && rp::host->Detour(rp::self, Ape(kDispatch), reinterpret_cast<void*>(&hk_Dispatch), reinterpret_cast<void**>(&g_origDispatch))
+               && rp::host->Detour(rp::self, Ape(kRawGet), reinterpret_cast<void*>(&hk_RawGet), reinterpret_cast<void**>(&g_origRawGet));
+    if (g_ready && g_fxOn) EnsureFx();
     rp::Log("weaponpreview: %s", !found ? "APE binary not recognised, off" : g_ready ? "detours ok" : "detour FAILED");
 }
 
@@ -1503,22 +1554,37 @@ static void BeforeFrameInner()
     g_atEnd = true;
 }
 
+bool SetPaused(bool paused)
+{
+    if (!ResolveApi()) return false;
+    uint8_t* o = g_opts ? *g_opts : nullptr;
+    void* widget = g_widget ? g_widget : g_frameWidget;
+    HMODULE qw = GetModuleHandleW(L"Qt5Widgets64r.dll");
+    auto update = qw ? reinterpret_cast<void (*)(void*)>(GetProcAddress(qw, "?update@QWidget@@QEAAXXZ")) : nullptr;
+    if (!o || !widget || !update) return false;
+    o[kOptsPaused] = paused ? 1 : 0;
+    if (g_clock) *reinterpret_cast<int*>(o + kOptsClock) = int(g_clock());
+    update(widget);
+    return true;
+}
+
 static void AfterFrameInner()
 {
-    if (!g_ready) return;
-    if (g_weapon && ba::fxplayer::Active())
+    if (!g_ready && !g_fxReady) return;
+    if (g_ready && g_weapon && ba::fxplayer::Active())
     {
         ba::fxplayer::Xform x{};
         if (FlashAnchor(x)) ba::fxplayer::SetAnchor(0, x);
         if (BrassAnchor(x)) ba::fxplayer::SetAnchor(1, x);
     }
-    ba::fxplayer::Update();
-    if (g_weapon) PlaceShells();
+    if (g_fxReady) ba::fxplayer::Update();
+    if (g_ready && g_weapon) PlaceShells();
 }
 
 // both run inside APE's frame function, outside the host's isolation
-void BeforeFrame()
+void BeforeFrame(void* widget)
 {
+    g_frameWidget = widget;
     if (g_broken) return;
     __try { BeforeFrameInner(); }
     __except (EXCEPTION_EXECUTE_HANDLER) { g_broken = true; }

@@ -2,6 +2,7 @@
 // APE's preview holds the play position and every note of the anim (GDT notes and exported notetracks), the plugin only listens.
 #include "modtools_plugin.hpp"
 #include "notesounds.h"
+#include "notefx.h"
 #include <windows.h>
 #include <xaudio2.h>
 #include <mfapi.h>
@@ -56,7 +57,7 @@ namespace
     uint8_t** g_opts = nullptr;
     std::string g_root;              // BO3 root, utf-8, no trailing slash
 
-    struct Note { double frame = 0; int kind = kCustom; std::string action, alias; bool exported = false; };
+    struct Note { double frame = 0; int kind = kCustom; std::string action, alias, tag; bool exported = false, fx = false; };   // fx: alias is the fx path, tag its bone
 
     void* g_anim = nullptr;          // the anim the notes belong to
     std::vector<Note> g_notes;
@@ -502,7 +503,7 @@ namespace
         g_lastMissing = alias + ": " + why;
         if (!g_told.insert(Lower(alias)).second) return;
         rp::Log("notesounds: %s", g_lastMissing.c_str());
-        if (rp::Ape()) rp::Ape()->Print(rp::self, ("Notetrack sound " + g_lastMissing).c_str());
+        if (rp::Ape()) rp::Ape()->Print(rp::self, ("Preview sound " + g_lastMissing).c_str());
     }
 
     // queues an alias: one of its rows at random, its Secondary too
@@ -597,7 +598,7 @@ namespace
         __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
     }
 
-    struct RawNote { int kind; int frame; char action[64]; char p1[192]; };
+    struct RawNote { int kind; int frame; char action[64]; char p1[192]; char p2[64]; };
     RawNote g_raw[256];
 
     void CopyStr(const uint8_t* s, char* out, size_t cap)
@@ -624,6 +625,7 @@ namespace
                     g_raw[n].kind = k; g_raw[n].frame = *reinterpret_cast<const int*>(r + 4);
                     CopyStr(r + 8, g_raw[n].action, sizeof g_raw[n].action);
                     CopyStr(r + 40, g_raw[n].p1, sizeof g_raw[n].p1);
+                    CopyStr(r + 72, g_raw[n].p2, sizeof g_raw[n].p2);
                 }
             }
         }
@@ -635,6 +637,7 @@ namespace
     void Fire(const Note& n)
     {
         ++g_fired;
+        if (n.fx) { ba::notefx::Fire(n.action, n.alias, n.tag); return; }
         std::string a = Lower(n.action);
         if (n.exported || a == "sound" || a == "2d sound" || a == "vox") Play(n.alias, false);
         else if (a == "start looping sound") Play(n.alias, true);
@@ -653,6 +656,7 @@ namespace
         if (!idx) return;
         for (const Note& n : g_notes)
         {
+            if (n.fx) continue;
             auto it = idx->aliases.find(Lower(n.alias));
             if (it == idx->aliases.end()) continue;
             for (const Alias& a : it->second)
@@ -688,9 +692,10 @@ namespace
             note.alias = SoundAlias(note.action);
             if (!note.alias.empty()) { if (!g_exported) continue; note.exported = true; }
             else if (g_gdt && IsSoundAction(note.action)) note.alias = Trim(g_raw[i].p1);
+            else if (ba::notefx::Enabled() && ba::notefx::IsFxAction(note.action)) { note.alias = Trim(g_raw[i].p1); note.tag = Trim(g_raw[i].p2); note.fx = true; }
             if (!note.alias.empty()) g_notes.push_back(std::move(note));
         }
-        rp::Log("notesounds: %s: %d notes, %zu with sound", g_asset.c_str(), n, g_notes.size());
+        rp::Log("notesounds: %s: %d notes, %zu with sound or fx", g_asset.c_str(), n, g_notes.size());
         Post(Job{0});
         Preload();
     }
@@ -736,6 +741,7 @@ void Tick()
     if (anim != g_anim)
     {
         StopAnimVoices();
+        ba::notefx::StopAll();
         g_anim = anim; g_prevValid = false; g_wasPlaying = false;
         LoadNotes(anim);
         TrimPcm();
@@ -744,6 +750,7 @@ void Tick()
     g_frames = live.frames;
     const double pos = double(std::clamp(live.t, 0.0f, 1.0f)) * live.frames;
     const bool playing = !live.paused;
+    ba::notefx::Pause(!playing);
     if (!playing)
     {
         if (g_wasPlaying) StopAll();
@@ -768,9 +775,17 @@ void Tick()
     g_prev = pos;
 }
 
-void PlayAlias(const std::string& alias) { if (g_opts) Play(alias, false, 0, true); }
+void PlayAlias(const std::string& alias, bool keep) { if (g_opts) Play(alias, false, 0, keep); }
+void PlayAliasLoop(const std::string& alias) { if (g_opts) Play(alias, true); }
+void StopAliasVoices(const std::string& alias) { StopAlias(alias); }
 
-int SoundNoteCount() { return g_anim ? int(g_notes.size()) : -1; }
+int SoundNoteCount()
+{
+    if (!g_anim) return -1;
+    int n = 0;
+    for (const Note& note : g_notes) if (!note.fx) ++n;
+    return n;
+}
 
 void Shutdown()
 {
@@ -820,7 +835,8 @@ bool Command(const std::string& c, std::string& reply)
         }
         for (const Note& n : g_notes)
         {
-            snprintf(buf, sizeof buf, "  note %s kind %d frame %.0f %s -> %s\n", n.exported ? "file" : "gdt", n.kind, n.frame, n.action.c_str(), n.alias.c_str());
+            snprintf(buf, sizeof buf, "  note %s kind %d frame %.0f %s -> %s%s%s\n", n.exported ? "file" : "gdt", n.kind, n.frame, n.action.c_str(), n.alias.c_str(),
+                     n.fx ? " on " : "", n.fx ? (n.tag.empty() ? "origin" : n.tag.c_str()) : "");
             reply += buf;
         }
         return true;

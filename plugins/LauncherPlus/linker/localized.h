@@ -17,6 +17,9 @@ namespace localized
     using SpawnvFn = intptr_t (__cdecl*)(int, const char*, const char* const*);
     using StatFn = int (__cdecl*)(const char*, struct _stat64i32*);
     inline SpawnvFn g_spawnv = nullptr;
+    inline void (*g_afterChild)() = nullptr;   // runs after a relinked child returns (soundskip re-reads its outputs)
+    constexpr intptr_t kNotSpawned = INTPTR_MIN;
+    inline intptr_t (*g_spawnChild)(const char* path, const char* const* argv) = nullptr;   // the runtime DLL's injected spawn, kNotSpawned = run stock
     inline StatFn g_stat = nullptr;
     inline std::wstring g_stateDir;
 
@@ -133,7 +136,7 @@ namespace localized
 
     struct State
     {
-        std::map<std::string, std::string> kv;   // deps=, gdt=, ff=, ffid=, hash:<lower path>=, kept= (time of the last skip)
+        std::map<std::string, std::string> kv;   // deps=, gdt=, ff=, ffid=, xpak=, xpakid=, hash:<lower path>=, kept= (time of the last skip)
         bool Load(const std::wstring& path)
         {
             std::string text;
@@ -215,6 +218,22 @@ namespace localized
         return best;
     }
 
+    // The child streams into <ff>.xpak next to its fastfile
+    inline std::wstring XpakOf(const std::wstring& ff)
+    {
+        const size_t dot = ff.find_last_of(L'.');
+        return (dot == std::wstring::npos ? ff : ff.substr(0, dot)) + L".xpak";
+    }
+
+    // "" = the xpak is as the last child run left it (xpakid= is empty when it wrote none)
+    inline std::string XpakCheck(State& st)
+    {
+        if (!st.kv.count("xpak")) return "the state predates the xpak check";
+        const std::string id = Identity(Widen(st.kv["xpak"]));
+        if (id == st.kv["xpakid"]) return "";
+        return id.empty() ? "the localized xpak is missing" : "the localized xpak was rewritten by another link";
+    }
+
     // "" = keep the fastfile, otherwise why the child has to run
     inline std::string Decide(const Job& job, size_t& checked)
     {
@@ -226,6 +245,7 @@ namespace localized
         const std::wstring ff = Widen(st.kv["ff"]);
         if (Identity(ff).empty()) return "the localized fastfile is missing";
         if (Identity(ff) != st.kv["ffid"]) return "the localized fastfile was rewritten by another link";
+        if (std::string why = XpakCheck(st); !why.empty()) return why;
         const Deps deps = ParseDeps(job.deps);
         if (!deps.ok) return "no usable dependency list";
         if (deps.errorcount) return "the last localized link reported errors";
@@ -256,6 +276,8 @@ namespace localized
         st.kv["gdt"] = Identity(job.gdtDb);
         st.kv["ff"] = Narrow(ff);
         st.kv["ffid"] = Identity(ff);
+        st.kv["xpak"] = Narrow(XpakOf(ff));
+        st.kv["xpakid"] = Identity(XpakOf(ff));
         for (const DepFile& f : deps.files)
             if (InsideMap(job, f.path)) st.kv["hash:" + LowerA(f.path)] = FileHash(Widen(f.path));
         st.Save(job.statePath);
@@ -287,9 +309,11 @@ namespace localized
         fflush(stdout);
         // The exit code is no verdict (2000 after good links): a .deps rewritten during the spawn is what Remember() judges by.
         const std::string depsBefore = Identity(job.deps);
-        const intptr_t result = g_spawnv(mode, path, argv);
+        intptr_t result = g_spawnChild ? g_spawnChild(path, argv) : kNotSpawned;
+        if (result == kNotSpawned) result = g_spawnv(mode, path, argv);
         if (Identity(job.deps) != depsBefore && !Identity(job.deps).empty()) Remember(job);
         else DeleteFileW(job.statePath.c_str());
+        if (g_afterChild) g_afterChild();
         return result;
     }
 

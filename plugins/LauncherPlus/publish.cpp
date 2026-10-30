@@ -585,7 +585,7 @@ namespace
         if (!st.Load(job.statePath)) return false;
         if (st.kv.count("kept"))
             return _wcsicmp(localized::Widen(st.kv["ff"]).c_str(), ff.c_str()) == 0 && localized::Identity(ff) == st.kv["ffid"]
-                && strtoull(st.kv["kept"].c_str(), nullptr, 10) + kLinkSlack >= mainT;
+                && localized::XpakCheck(st).empty() && strtoull(st.kv["kept"].c_str(), nullptr, 10) + kLinkSlack >= mainT;
         size_t checked = 0;
         return localized::Decide(job, checked).empty();
     }

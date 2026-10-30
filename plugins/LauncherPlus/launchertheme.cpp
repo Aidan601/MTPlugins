@@ -300,8 +300,7 @@ namespace
         ui->LayoutMargins(h, 0, 0, 0, 0);
         void* label = ui->Label("Theme:", row);
         void* combo = ui->ComboBox(row);
-        ui->SetToolTip(combo, "The launcher's look: Classic Treyarch and Classic are its own two (the old \"Use Treyarch Theme\" on and off), Treyarch a modern theme in its colours; "
-                              "the others are the themes of bin\\themes, shared with Radiant and APE.");
+        ui->SetToolTip(combo, "The launcher's look. Themes in bin\\themes are shared with Radiant and APE.");
         const std::string shown = Lower(ShownName(ui->IsChecked(check) != 0));
         int current = 0;
         for (size_t i = 1; i < g_list.size(); ++i)     // [0], the launcher's own, is Classic Treyarch or Classic here
@@ -326,8 +325,7 @@ namespace
         void* discord = ui->ComboBox(drow);
         for (const char* s : kDiscord) ui->ComboAdd(discord, s);
         ui->ComboSetCurrent(discord, discordrpc::GetMode());
-        ui->SetToolTip(discord, "What your Discord profile shows while the launcher is in use. Off: nothing. Show the launcher: only that it is open. "
-                                "Show the launcher and the build: also the checked map or mod and the build step. Radiant and APE have their own setting.");
+        ui->SetToolTip(discord, "What your Discord profile shows while the launcher is open.");
         ui->BoxAddWidget(dh, dlabel, 0);
         ui->BoxAddWidget(dh, discord, 1);
         ui->SetLayout(drow, dh);

@@ -533,7 +533,8 @@ typedef struct ModToolsHostApi
     int  (*CommitBrushGeometry)(ModToolsPlugin* p, ModToolsBrush brush, const float* pts, size_t nFaces, const float delta[3], const char* undoLabel);
     /* [Radiant] MAIN THREAD (check rp::Has): replace the matching camera LUT texture in memory only; the host copies both buffers. */
     void (*SetCameraLutPreview)(ModToolsPlugin* p, const ModToolsCameraLutPreview* preview);
-    /* [Radiant] (check rp::Has): OFF, WAITING, ACTIVE, UNSUPPORTED, NO_MATCH or MATCHED for the selected camera LUT. */
+    /* [Radiant] (check rp::Has): OFF, WAITING, ACTIVE, UNSUPPORTED, NO_MATCH or MATCHED for the selected camera LUT.
+     * The search ends after 600 camera frames; a new referenceRgb starts it again. */
     int  (*CameraLutPreviewStatus)(ModToolsPlugin* p);
 } ModToolsHostApi;
 

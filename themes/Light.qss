@@ -10,7 +10,7 @@ QMainWindow::separator { background-color: #c2c2c2; width: 3px; height: 3px; }
 QMainWindow::separator:hover { background-color: #2f6db5; }
 QLabel, QCheckBox, QRadioButton { background-color: transparent; }
 QFrame[frameShape="4"], QFrame[frameShape="5"] { color: #c2c2c2; background-color: #c2c2c2; }
-QToolTip { background-color: #ffffff; color: #1e1f22; border: 1px solid #c2c2c2; padding: 3px 5px; }
+QToolTip { background-color: #ffffff; color: #1e1f22; border: 1px solid #c2c2c2; padding: 0px; }
 
 QMenuBar { background-color: #e4e4e4; border-bottom: 1px solid #c2c2c2; }
 QMenuBar::item { background: transparent; padding: 4px 9px; }

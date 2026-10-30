@@ -1,14 +1,15 @@
-// update.cpp: the "new MTPlugins release" question in the launcher and the "plugin updates" question in every app (see update.h).
+// update.cpp: the "new MTPlugins release" question (the launcher at every start, Radiant and APE when no app checked in the last day) and the "plugin updates" question in every app (see update.h).
 
 // MAP
-//   Settings     Enabled/SetEnabled ([update] check=), PluginsEnabled ([update] plugins=), Source ([update] url=), Skipped
+//   Settings     Enabled/SetEnabled ([update] check=), PluginsEnabled ([update] plugins=), Source ([update] url=), Skipped, LastCheck/StampCheck ([update] last_check=)
 //   Workers      CheckWorker (GitHub's latest release JSON -> setup asset), DownloadWorker (setup exe into %TEMP%)
-//   Main thread  StartupCheck, CheckNow, Tick -> Ask, Launch, DownloadFailed
+//   Main thread  StartupCheck, CheckNow, Tick -> Ask, Launch (the launcher: Setup now; an editor: LaunchAfterExit), DownloadFailed
 //   Plugins      PendingPlugins, AskPlugins (renamed MessageBox buttons), ReportPlugins
 #include <windows.h>
 #include <shellapi.h>
 #include <tlhelp32.h>
 #include <atomic>
+#include <ctime>
 #include <mutex>
 #include <vector>
 #include "update.h"
@@ -72,6 +73,16 @@ namespace
         return s;
     }
 
+    // [update] last_check: when any app last finished a release check (the editors ask only when it was over a day ago)
+    const long long kEditorQuietSeconds = 24 * 3600;
+    long long LastCheck()
+    {
+        wchar_t buf[32] = {};
+        GetPrivateProfileStringW(L"update", L"last_check", L"", buf, 32, Cfg().iniPath.c_str());
+        return _wtoi64(buf);
+    }
+    void StampCheck() { WritePrivateProfileStringW(L"update", L"last_check", std::to_wstring(static_cast<long long>(time(nullptr))).c_str(), Cfg().iniPath.c_str()); }
+
     bool ValidHttps(const std::string& u)
     {
         if (_strnicmp(u.c_str(), "https://", 8) != 0 || u.size() > 2000) return false;
@@ -107,6 +118,7 @@ namespace
         {
             SetStatus("up to date (" MTPLUGINS_VERSION ", latest release " + r.version + ")");
             { std::lock_guard<std::mutex> lk(g_mu); g_releaseLine = "MTPlugins " MTPLUGINS_VERSION " is up to date."; }
+            StampCheck();
             g_phase = Idle;
             return;
         }
@@ -191,6 +203,7 @@ namespace
         { std::lock_guard<std::mutex> lk(g_mu); r = g_rel; }
         g_phase = Asking;
         g_releaseAsked = true;
+        StampCheck();
         std::string q = "MTPlugins " + r.version + " is out (you have " MTPLUGINS_VERSION ").\n\n";
         if (r.setupUrl.empty())
         {
@@ -198,23 +211,59 @@ namespace
             g_phase = Idle;
             return;
         }
-        q += "Update now? It installs by itself with the plugins you have and keeps your settings. The launcher closes and opens again when it is done.";
+        q += "Update now? It installs by itself with the plugins you have and keeps your settings. ";
+        if (app::IsLauncher()) q += "The launcher closes and opens again when it is done.";
+        else q += std::string(app::Name()) + " closes now (you will be asked to save) and opens again when it is done.";
         if (Box(q, MB_YESNO | MB_ICONINFORMATION) != IDYES) { SetStatus("update to " + r.version + " declined for now"); g_phase = Idle; return; }
         g_phase = Downloading;
         Wrap(DownloadWorker, nullptr);
     }
 
-    // Radiant or APE running anywhere: they hold the plugin files, and Setup would close them unsaved
+    // Radiant or APE running anywhere (not this process): they hold the plugin files, and Setup would close them unsaved
     bool EditorOpen()
     {
         HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
         if (snap == INVALID_HANDLE_VALUE) return false;
         PROCESSENTRY32W pe{ sizeof pe };
+        DWORD me = GetCurrentProcessId();
         bool found = false;
         for (BOOL ok = Process32FirstW(snap, &pe); ok && !found; ok = Process32NextW(snap, &pe))
-            found = !_wcsicmp(pe.szExeFile, L"Radiant_modtools.exe") || !_wcsicmp(pe.szExeFile, L"asseteditor_modtools.exe");
+            found = pe.th32ProcessID != me && (!_wcsicmp(pe.szExeFile, L"Radiant_modtools.exe") || !_wcsicmp(pe.szExeFile, L"asseteditor_modtools.exe"));
         CloseHandle(snap);
         return found;
+    }
+
+    std::wstring PsQuote(const std::wstring& s)      // PowerShell single-quoted string
+    {
+        std::wstring out = L"'";
+        for (wchar_t c : s) { out += c; if (c == L'\'') out += c; }
+        return out + L"'";
+    }
+
+    // An editor cannot run Setup itself (Setup closes the editor unsaved): a hidden PowerShell waits for this process to exit,
+    // then starts Setup, which reopens the editor (RELAUNCH=radiant|ape). The editor is asked to close now; cancelling the save
+    // prompt keeps it open and Setup runs whenever it closes.
+    void LaunchAfterExit(const std::wstring& path, const Release& r)
+    {
+        std::wstring args = std::wstring(L"/SILENT /NORESTART /RELAUNCH=") + (app::IsRadiant() ? L"radiant" : L"ape");
+        std::wstring cmd = L"powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -Command \"Wait-Process -Id "
+            + std::to_wstring(GetCurrentProcessId()) + L" -ErrorAction SilentlyContinue; Start-Process -FilePath " + PsQuote(path) + L" -ArgumentList " + PsQuote(args) + L"\"";
+        std::vector<wchar_t> buf(cmd.begin(), cmd.end());
+        buf.push_back(0);
+        STARTUPINFOW si{ sizeof si };
+        PROCESS_INFORMATION pi{};
+        if (!CreateProcessW(nullptr, buf.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
+        {
+            DWORD e = GetLastError();
+            SetStatus("the installer could not be scheduled (error " + std::to_string(e) + ")");
+            if (Box("The update could not be started (Windows error " + std::to_string(e) + ").\n\nOpen the release page to download it yourself?", MB_YESNO | MB_ICONWARNING) == IDYES)
+                OpenPage(r.page);
+            return;
+        }
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        SetStatus(std::string("installer starts when ") + app::Name() + " closes (waiter pid " + std::to_string(pi.dwProcessId) + ")");
+        PostMessageW(mt::MainWindow(), WM_CLOSE, 0, 0);
     }
 
     void Launch()
@@ -224,11 +273,12 @@ namespace
         { std::lock_guard<std::mutex> lk(g_mu); path = g_setupPath; r = g_rel; }
         g_phase = Idle;
         while (EditorOpen())
-            if (Box("Radiant or APE is open. Save your work and close them, then press Retry.", MB_RETRYCANCEL | MB_ICONWARNING) != IDRETRY)
+            if (Box(std::string(app::IsLauncher() ? "Radiant or APE is open" : "Another Radiant or APE is open") + ". Save your work and close them, then press Retry.", MB_RETRYCANCEL | MB_ICONWARNING) != IDRETRY)
             {
                 SetStatus("update to " + r.version + " put off: an editor is open");
                 return;
             }
+        if (!app::IsLauncher()) { LaunchAfterExit(path, r); return; }
         // silent: the previous folder, plugins and tasks, a progress window only, then the launcher again (Setup's RELAUNCH)
         SHELLEXECUTEINFOW sei{ sizeof sei };
         sei.fMask = SEE_MASK_NOASYNC;
@@ -371,8 +421,13 @@ namespace update
         // plugin updates: every app, dev builds too (only plugins installed from the list can be offered)
         if (!PluginsEnabled()) SetPluginStatus("switched off ([update] plugins=0)");
         else { g_pluginsPending = true; SetPluginStatus("loading the plugin list"); if (!browse::Loaded() && !browse::Loading()) browse::Refresh(); }
-        // MTPlugins release: the launcher only, installed copies only unless [update] url= is set
-        if (!app::IsLauncher()) { SetStatus("the release is checked in the launcher only"); return; }
+        // MTPlugins release: the launcher at every start; an editor when no app finished a check in the last day (a user who
+        // starts the editors without the launcher still hears about releases); installed copies only unless [update] url= is set
+        if (!app::IsLauncher())
+        {
+            long long last = LastCheck(), age = static_cast<long long>(time(nullptr)) - last;
+            if (last > 0 && age >= 0 && age < kEditorQuietSeconds) { SetStatus("checked " + std::to_string(age / 3600) + " h ago (the launcher or an editor), an editor asks again after a day"); return; }
+        }
         if (!Enabled()) { SetStatus("switched off ([update] check=0)"); return; }
         if (!InstalledCopy() && Source().empty()) { SetStatus("dev build (host not in <game>\\bin\\plugins): no check"); return; }
         StartCheck();
@@ -414,7 +469,8 @@ namespace update
         g_inTick = true;
         try
         {
-            if (ph == Found) Ask(); else if (ph == Downloaded) Launch(); else if (ph == DownloadError) DownloadFailed();
+            bool ready = ReadyToAsk();      // an editor asks only with its window up and idle
+            if (ph == Found || ph == Downloaded || ph == DownloadError) { if (ready) { if (ph == Found) Ask(); else if (ph == Downloaded) Launch(); else DownloadFailed(); } }
             else if (ph == Idle && g_pluginsPending && !browse::Loading() && ReadyToAsk())
             {
                 g_pluginsPending = false;

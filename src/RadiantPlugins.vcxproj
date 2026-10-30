@@ -81,6 +81,7 @@
     <ClCompile Include="log.cpp" />
     <ClCompile Include="config.cpp" />
     <ClCompile Include="mainthread.cpp" />
+    <ClCompile Include="hangwatch.cpp" />
     <ClCompile Include="hooks.cpp" />
     <ClCompile Include="radiant_addrs.cpp" />
     <ClCompile Include="render.cpp" />
@@ -108,6 +109,7 @@
     <ClInclude Include="qt.h" />
     <ClInclude Include="config.h" />
     <ClInclude Include="mainthread.h" />
+    <ClInclude Include="hangwatch.h" />
     <ClInclude Include="hooks.h" />
     <ClInclude Include="radiant_addrs.h" />
     <ClInclude Include="render.h" />

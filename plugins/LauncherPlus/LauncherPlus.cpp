@@ -462,7 +462,7 @@ extern "C" MODTOOLS_PLUGIN_EXPORT const ModToolsPluginApi* ModToolsPluginEntry(M
     api.apiVersion = MODTOOLS_PLUGIN_API_VERSION;
     api.name = "LauncherPlus";
     api.displayName = "Launcher+";
-    api.version = "1.1.2";
+    api.version = "1.1.3";
     api.author = "Figglebottom";
     api.description = "QOL fixes and improvements to the Launcher.";
     api.url = "https://github.com/Aidan601/MTPlugins/tree/main/plugins/LauncherPlus";

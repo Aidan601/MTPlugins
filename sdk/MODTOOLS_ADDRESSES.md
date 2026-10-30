@@ -8,7 +8,7 @@ Names come from Treyarch's log texts and id's Q3Radiant where known, else from w
 Every function address below is a real function start (listed in the exe's exception table). This file is
 generated from the addresses the host and the shipped plugins use: do not edit it by hand.
 
-## Radiant functions (240)
+## Radiant functions (242)
 
 | Address | Name | Prototype (x64) | Notes |
 | ------- | ---- | --------------- | ----- |
@@ -125,6 +125,7 @@ generated from the addresses the host and the shipped plugins use: do not edit i
 | `0x1409B5ED0` | `BeamReloadAll` |  | under the SRW lock below |
 | `0x1409BBAC0` | `GetRenderOpt` | `bool(int index)` | bool, bit 1 = Fx > Fx Rendering Enabled |
 | `0x1409BC2B0` | `SetRenderOpt` | `void(int index, char on)` | Radiant's render options bit array 0x145215AC0 (locked) |
+| `0x1409FB000` | `QtDbCheck` |  | asset browsers' 100 ms check: closes their connection when the snapshot name changed |
 | `0x140B00BB0` | `BrushCollection_ForEach` | `(collection, std::function<bool(BrushInst*)>*)` |  |
 | `0x140B00FA0` | `Undo_AddBrushList` | `(BrushCollection*)` | records the selection in the open operation |
 | `0x140B00FF0` | `Selection_CloseUndo` | `(BrushCollection*)` | after Undo_AddBrushList |
@@ -177,6 +178,7 @@ generated from the addresses the host and the shipped plugins use: do not edit i
 | `0x140D35340` | `PrepareForMapLoad` |  | char PrepareForMapLoad: leaves any open prefab (Map_LeavePrefab(1)) after a modified check, 0 = abort |
 | `0x140D3C9F0` | `EndParseSession` | `(const char* name)` / `` | around an import |
 | `0x140D46D40` | `Bookmarks_Save` |  | char Bookmarks_Save(void* bookmarks, const char* mapName): writes Bookmark0..9 + LastUsed to QSettings |
+| `0x140E52B50` | `DestroyEntry` |  | gdt_db entry destructor: closes the old copies, called with the old entry after a reload |
 | `0x140E88F80` | `TADockWidget_setWidget` | `(this, QWidget* orNull)` | adds it to the dock's layout, null = first child widget |
 | `0x140E89040` | `TADockWidget::toggleView` |  | TADockWidget::toggleView(this, bool show): show/raise a pane (tests) |
 | `0x140E8AEC0` | `RadiantMainWin_DockContainer` | `(QMainWindow*)` | the TADockContainer central widget, null until the UI exists |
@@ -253,7 +255,7 @@ generated from the addresses the host and the shipped plugins use: do not edit i
 | `0x1412CC720` | `CacheWrite` |  | "ToolsGfx/xmeshes/v39/<mesh>/pct%d_<key>" |
 | `0x1412F15D0` | `Lookup` | `int (table*, Qt::MouseButton, Qt::KeyboardModifiers)` | action id, 0 = none |
 
-## Radiant globals (98)
+## Radiant globals (102)
 
 | Address | Name | Notes |
 | ------- | ---- | ----- |
@@ -271,7 +273,11 @@ generated from the addresses the host and the shipped plugins use: do not edit i
 | `0x14272A220` | `Offsets` | int32[124][3]: 0..25 the 3x3x3 shell, 26..123 the radius-2 shell |
 | `0x14331F720` | `RadStaticMeta` | QRadFileDialog::staticMetaObject (no methods, no properties) |
 | `0x14331FA58` | `RadiantQtBridge_staticMetaObject` |  |
+| `0x14333BEE0` | `QtDbName` | std::string: the URI the asset browsers have open (the live copy) |
 | `0x143370458` | `RotateStepTable` | int[10]: rotation step in degrees per grid index (0x140C27F70, 90 past the table) |
+| `0x143387B38` | `StartEvent` | HANDLE: the loader thread's start event |
+| `0x143387B70` | `MonitorThread` | HANDLE of the gdt.db monitor thread (fires the reload on a write-time change) |
+| `0x143387B98` | `DbPath` | std::string: the gdt.db path |
 | `0x14338F558` | `V63AssetCacheLocalRoot` | std::string local asset-cache directory |
 | `0x1433B5740` | `ViewIndex` | int, the current view, 7 = none (Present sets it back) |
 | `0x1443900B0` | `FxSystemCount` | int, local fx clients |
@@ -356,14 +362,16 @@ generated from the addresses the host and the shipped plugins use: do not edit i
 | `0x146D31B88` | `ImpEnterCriticalSection` | Radiant's import slot for EnterCriticalSection |
 | `0x146D31BF0` | `ImpTryEnterCriticalSection` | TryEnterCriticalSection |
 
-## APE functions (48)
+## APE functions (50)
 
 | Address | Name | Prototype (x64) | Notes |
 | ------- | ---- | --------------- | ----- |
 | `0x140050060` | `std::string::assign` |  | std::string::assign(const char*, size_t) with APE's allocator // selection handler: cmp [child tag size], 0 then jz, no attach without a child tag |
 | `0x14005FBC0` | `Intern` | `(uint64_t* out, const char*)` | the interned name handle |
 | `0x140062190` | `Field` | `(record, const char** out, const char* key)` | the value, "" when unset |
-| `0x14007A040` | `ReloadDeleteAssetDialog` | `(tree*, QVector<apeGdtFileCacheEntry*>* changed, QVector<char*>* deleted files)` |  |
+| `0x140069470` | `ListAppend` |  | QList<QString>::append(const QString&) |
+| `0x140075570` | `AddAsset` | `(tree, entry, type index, QTreeWidgetItem** row, bool sorted)` |  |
+| `0x14007A040` | `ReloadDeleteAssetDialog` | `(tree*, QVector<apeGdtFileCacheEntry*>* changed, QVector<char*>* deleted files)` | ReloadDeleteAssetDialog, the only batch caller |
 | `0x14007B690` | `Lookup` | `(asset db, const uint64_t* name handle, int type, char 0)` | record or null |
 | `0x14007CBC0` | `TypeIndex` | `(asset db, const uint64_t* type handle)` | type index, -1 unknown |
 | `0x140084510` | `TimerSlotBegin` |  |  |

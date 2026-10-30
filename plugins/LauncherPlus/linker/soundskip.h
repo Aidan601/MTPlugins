@@ -1,5 +1,5 @@
 // skip_sound_convert: do not start sound\snd_convert.exe when nothing it reads changed (hooks kernelbase!CreateProcessA, linker+0x7C760).
-// A skip returns TRUE with signaled event handles in PROCESS_INFORMATION. State: linker_state\<map>_snd_<language>.txt.
+// A skip, or a run finished here with its output passed through, returns TRUE with signaled event handles in PROCESS_INFORMATION. State: linker_state\<map>_snd_<language>.txt.
 #pragma once
 #include <windows.h>
 #include <bcrypt.h>
@@ -193,23 +193,20 @@ namespace soundskip
         while (!p.empty() && p.back() == L'\\') p.pop_back();
         return LowerW(p);
     }
-    // The linker's own command line: -modsource <map>, not the localized child. Root = the folder above bin\.
+    // The map from the linker's command line. Root = the folder above bin\.
     inline void StartPrefetch()
     {
         int argc = 0;
         LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
         if (!argv) return;
+        // -modsource <map>; the localized child's line is -modsource -spawnedchild -localized <map>
         std::wstring map;
-        bool child = false;
         for (int i = 1; i < argc; ++i)
-        {
-            if (!_wcsicmp(argv[i], L"-spawnedchild")) child = true;
-            if (!_wcsicmp(argv[i], L"-modsource") && i + 1 < argc) map = argv[i + 1];
-        }
+            if (!_wcsicmp(argv[i], L"-modsource") && i + 1 < argc) map = argv[i + 1][0] == L'-' ? argv[argc - 1] : argv[i + 1];
         LocalFree(argv);
         wchar_t exe[MAX_PATH * 2] = {};
         const DWORD n = GetModuleFileNameW(nullptr, exe, MAX_PATH * 2);
-        if (child || map.empty() || !n || n >= MAX_PATH * 2) return;
+        if (map.empty() || map[0] == L'-' || !n || n >= MAX_PATH * 2) return;
         std::wstring root(exe);
         root = root.substr(0, root.find_last_of(L"\\/"));    // <root>\bin
         root = root.substr(0, root.find_last_of(L"\\/"));    // <root>
@@ -314,6 +311,7 @@ namespace soundskip
         outputs = 0;
         State st;
         if (!st.Load(job.statePath)) return "first link recorded by BetterBuild";
+        if (!st.kv["failed"].empty()) return "the last run exited with code " + st.kv["failed"];
         if (st.kv["sig"] != sig) return "its inputs changed";
         for (const auto& [k, v] : st.kv)
         {
@@ -325,15 +323,93 @@ namespace soundskip
         return "";
     }
 
-    inline void Remember(const Job& job, const std::string& sig)
+    // the parent's last state, re-read after the localized child (its own stock snd_convert run rewrites the language banks)
+    inline std::wstring g_lastStatePath, g_lastMapDir;
+
+    inline void RefreshOutputs()
+    {
+        if (g_lastStatePath.empty()) return;
+        State st;
+        if (!st.Load(g_lastStatePath) || !st.kv["failed"].empty()) return;
+        for (auto it = st.kv.begin(); it != st.kv.end();) it = it->first.compare(0, 4, "out:") ? std::next(it) : st.kv.erase(it);
+        std::vector<Entry> list;
+        Walk(g_lastMapDir + L"\\sound\\zone", L"", L"", list);
+        if (list.empty()) { DeleteFileW(g_lastStatePath.c_str()); return; }
+        for (const Entry& e : list) st.kv["out:" + Narrow(e.full)] = Identity(e.full);
+        st.Save(g_lastStatePath);
+    }
+
+    inline void Remember(const Job& job, const std::string& sig, DWORD code)
     {
         State st;
         st.kv["sig"] = sig;
+        st.kv["cmd"] = job.commandLine;   // the whole-link check (linkskip.h) rebuilds the job from it
+        // a failed run can stop before the loaded bank (.sabl) is written, so it is kept only to rerun the next link
+        if (code != 0) { st.kv["failed"] = std::to_string(code); st.Save(job.statePath); return; }
         std::vector<Entry> list;
         Walk(job.mapDir + L"\\sound\\zone", L"", L"", list);
         if (list.empty()) { DeleteFileW(job.statePath.c_str()); return; }
         for (const Entry& e : list) st.kv["out:" + Narrow(e.full)] = Identity(e.full);
         st.Save(job.statePath);
+    }
+
+#ifndef SOUNDSKIP_DECIDE_ONLY   // linkskip.h reuses Parse, Signature and Decide without hooks
+    // snd_convert hashes its sources on 4 threads into an unlocked Dictionary: a lost entry fails the run with "Missing source checksum".
+    // (skip_sound_convert).
+    constexpr int kRaceAttempts = 3;
+
+    struct ToolOutput { HANDLE read; std::string text; };
+
+    inline DWORD WINAPI PassOutput(LPVOID p)
+    {
+        auto* out = static_cast<ToolOutput*>(p);
+        char buf[4096];
+        DWORD n = 0;
+        while (ReadFile(out->read, buf, sizeof buf, &n, nullptr) && n)
+        {
+            fwrite(buf, 1, n, stdout);
+            fflush(stdout);
+            out->text.append(buf, n);
+        }
+        return 0;
+    }
+
+    // Runs the tool to its end with its output passed to ours (the linker starts it without handles, so stock hides every message).
+    inline bool RunTool(LPCSTR app, LPCSTR cmd, LPSECURITY_ATTRIBUTES pa, LPSECURITY_ATTRIBUTES ta, DWORD flags, LPVOID env, LPCSTR cwd, LPSTARTUPINFOA si,
+                        DWORD& code, bool& raced)
+    {
+        SECURITY_ATTRIBUTES inheritable = { sizeof inheritable, nullptr, TRUE };
+        HANDLE readEnd = nullptr, writeEnd = nullptr;
+        if (!CreatePipe(&readEnd, &writeEnd, &inheritable, 0)) return false;
+        SetHandleInformation(readEnd, HANDLE_FLAG_INHERIT, 0);
+        STARTUPINFOA startup = si ? *si : STARTUPINFOA{};
+        startup.cb = sizeof startup;
+        startup.dwFlags |= STARTF_USESTDHANDLES;
+        startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+        startup.hStdOutput = writeEnd;
+        startup.hStdError = writeEnd;
+        std::string line = cmd ? cmd : "";
+        PROCESS_INFORMATION pi = {};
+        const BOOL ok = g_createProcessA(app, line.data(), pa, ta, TRUE, flags & ~DWORD(CREATE_SUSPENDED), env, cwd, &startup, &pi);
+        CloseHandle(writeEnd);
+        if (!ok) { CloseHandle(readEnd); return false; }
+        CloseHandle(pi.hThread);
+        ToolOutput out{ readEnd, {} };
+        HANDLE reader = CreateThread(nullptr, 0, &PassOutput, &out, 0, nullptr);
+        if (!reader) PassOutput(&out);   // ends when the tool exits
+        WaitForSingleObject(pi.hProcess, INFINITE);
+        code = 1;
+        GetExitCodeProcess(pi.hProcess, &code);
+        CloseHandle(pi.hProcess);
+        if (reader)
+        {
+            // a process started by the tool may still hold the pipe
+            while (WaitForSingleObject(reader, 2000) == WAIT_TIMEOUT) CancelSynchronousIo(reader);
+            CloseHandle(reader);
+        }
+        CloseHandle(readEnd);
+        raced = out.text.find("Missing source checksum") != std::string::npos;
+        return true;
     }
 
     inline BOOL WINAPI HookCreateProcessA(LPCSTR app, LPSTR cmd, LPSECURITY_ATTRIBUTES pa, LPSECURITY_ATTRIBUTES ta, BOOL inherit, DWORD flags,
@@ -354,6 +430,9 @@ namespace soundskip
             fprintf(stdout, "[BetterBuild] Sound conversion skipped: nothing under sound_assets, share\\raw\\sound or the map's sound folder changed since the last link (%zu files checked in %llu ms; skip_sound_convert=0 in LauncherPlus.ini always runs it).\n",
                     files, GetTickCount64() - t0);
             fflush(stdout);
+            State st;
+            if (st.Load(job.statePath) && st.kv["cmd"] != job.commandLine) { st.kv["cmd"] = job.commandLine; st.Save(job.statePath); }
+            g_lastStatePath = job.statePath; g_lastMapDir = job.mapDir;
             *pi = {};
             pi->hProcess = CreateEventW(nullptr, TRUE, TRUE, nullptr);
             pi->hThread = CreateEventW(nullptr, TRUE, TRUE, nullptr);
@@ -363,42 +442,29 @@ namespace soundskip
         }
         fprintf(stdout, "[BetterBuild] Sound conversion running: %s (%zu files checked in %llu ms).\n", why.c_str(), files, GetTickCount64() - t0);
         fflush(stdout);
-        // The linker starts the tool without handle inheritance, so its messages never reach the launcher: pass our stdout and stderr.
-        STARTUPINFOA startup = si ? *si : STARTUPINFOA{};
-        startup.cb = sizeof startup;
-        startup.dwFlags |= STARTF_USESTDHANDLES;
-        startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
-        startup.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
-        startup.hStdError = GetStdHandle(STD_ERROR_HANDLE);
-        // the caller waits on the process itself, so record once it is gone from a thread that outlives this call
-        struct Pending { std::string sig; Job job; HANDLE process; };
-        const BOOL ok = g_createProcessA(app, cmd, pa, ta, TRUE, flags, env, cwd, &startup, pi);
-        if (ok && pi && !sig.empty())
+        DWORD code = 1;
+        bool raced = false;
+        if (!pi || !RunTool(app, cmd, pa, ta, flags, env, cwd, si, code, raced))
+            return g_createProcessA(app, cmd, pa, ta, inherit, flags, env, cwd, si, pi);
+        for (int attempt = 2; code != 0 && raced && attempt <= kRaceAttempts; ++attempt)
         {
-            HANDLE dup = nullptr;
-            if (DuplicateHandle(GetCurrentProcess(), pi->hProcess, GetCurrentProcess(), &dup, SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, 0))
-            {
-                auto* pending = new Pending{ sig, job, dup };
-                HANDLE thread = CreateThread(nullptr, 0, [](LPVOID p) -> DWORD {
-                    auto* w = static_cast<Pending*>(p);
-                    WaitForSingleObject(w->process, INFINITE);
-                    DWORD code = 1;
-                    GetExitCodeProcess(w->process, &code);
-                    CloseHandle(w->process);
-                    // The exit code is no verdict (snd_convert exits 2 with a flaky "Missing source checksum" yet leaves complete banks), so the run is recorded either way.
-                    if (code != 0)
-                    {
-                        fprintf(stdout, "[BetterBuild] snd_convert exited with code %lu (its messages are above; the link continues as stock does).\n", code);
-                        fflush(stdout);
-                    }
-                    Remember(w->job, w->sig);
-                    delete w;
-                    return 0;
-                }, pending, 0, nullptr);
-                if (thread) CloseHandle(thread); else { CloseHandle(dup); delete pending; }
-            }
+            fprintf(stdout, "[BetterBuild] snd_convert lost a file in its own parallel source scan (a bug in the tool, not in the file): running it again, attempt %d of %d.\n", attempt, kRaceAttempts);
+            fflush(stdout);
+            if (!RunTool(app, cmd, pa, ta, flags, env, cwd, si, code, raced)) break;
         }
-        return ok;
+        if (code != 0)
+        {
+            fprintf(stdout, "[BetterBuild] snd_convert exited with code %lu (its messages are above; the link continues as stock does, the next link runs it again).\n", code);
+            fflush(stdout);
+        }
+        if (!sig.empty()) { Remember(job, sig, code); g_lastStatePath = job.statePath; g_lastMapDir = job.mapDir; }
+        // the tool already ran: the linker waits on signaled events as after a skip
+        *pi = {};
+        pi->hProcess = CreateEventW(nullptr, TRUE, TRUE, nullptr);
+        pi->hThread = CreateEventW(nullptr, TRUE, TRUE, nullptr);
+        pi->dwProcessId = GetCurrentProcessId();
+        pi->dwThreadId = GetCurrentThreadId();
+        return TRUE;
     }
 
     inline bool Install(const std::wstring& stateDir)
@@ -407,4 +473,5 @@ namespace soundskip
         // The packed linker's import table reaches kernelbase directly (kernel32's stub never fired)
         return MH_CreateHookApi(L"kernelbase", "CreateProcessA", reinterpret_cast<LPVOID>(&HookCreateProcessA), reinterpret_cast<LPVOID*>(&g_createProcessA)) == MH_OK;
     }
+#endif
 }

@@ -1,11 +1,14 @@
 // linker_modtools wrapper started by BuildPlusBridge.dll. The linker (and its localized child) runs in a kill-on-close job.
-// Usage: BuildPlusLinker.exe --real <linker_modtools.exe> -- <linker arguments>
+// Usage: BuildPlusLinker.exe [--no-skip] --real <linker_modtools.exe> -- <linker arguments>
 // With [linker] patches=1 and a known linker build, BuildPlusLinkerRT.dll is loaded into the suspended linker.
 #include <windows.h>
 #include <string>
 #include <vector>
 #include <cstdio>
 #include "../worker/inject.h"
+#include "linkskip.h"
+#include "xpakclean.h"
+#include "assetreport.h"
 
 namespace
 {
@@ -60,10 +63,82 @@ namespace
         bool preferPerformance = true;
         bool patches = false;
         bool verify = false;
+        int skipUnchanged = 0;   // 0 off, 1 on, 2 verify (decide and report, link anyway)
+        bool compactXpak = true;
         uintptr_t mode = 0;
     };
 
-    int Run(const std::wstring& real, const std::vector<std::wstring>& args, const Options& opt, const std::wstring& pluginDir)
+    int Link(const std::wstring& real, const std::vector<std::wstring>& args, const Options& opt, const std::wstring& pluginDir,
+             unchanged::Tap* tap);
+
+    int Run(const std::wstring& real, const std::vector<std::wstring>& args, Options opt, const std::wstring& pluginDir)
+    {
+        if (!opt.skipUnchanged || !opt.patches) return Link(real, args, opt, pluginDir, nullptr);
+        linkskip::Job job = linkskip::Prepare(real, args, pluginDir, (unsigned)opt.mode);
+        if (!job.applicable)
+        {
+            char line[200];
+            snprintf(line, sizeof line, "Skip unchanged: not checked (%s).", job.reason.c_str());
+            Say(line);
+            return Link(real, args, opt, pluginDir, nullptr);
+        }
+        const ULONGLONG t0 = GetTickCount64();
+        size_t checked = 0;
+        const std::string why = linkskip::Decide(job, checked);
+        const double seconds = (GetTickCount64() - t0) / 1000.0;
+        std::string line;
+        if (why.empty() && opt.skipUnchanged == 1)
+        {
+            char buf[400];
+            snprintf(buf, sizeof buf, "Link skipped: nothing it reads changed since the last link (%zu files checked in %.1f s), zone\\%s.ff kept. "
+                     "skip_unchanged=0 in LauncherPlus.ini always links.", checked, seconds, localized::Narrow(job.map).c_str());
+            Say(buf);
+            linkskip::Replay(job);
+            return 0;
+        }
+        line = why.empty() ? "Skip unchanged (verify mode): nothing changed, linking anyway to compare" : "Linking: " + why;
+        char tail[64];
+        snprintf(tail, sizeof tail, " (checked in %.1f s).", seconds);
+        Say((line + tail).c_str());
+        if (GetEnvironmentVariableW(L"BB_SKIP_DECIDE_ONLY", nullptr, 0)) return 0;   // tests: the decision only
+        unchanged::State old;
+        if (why.empty()) old.Load(job.statePath);
+
+        DeleteFileW(job.journal.c_str());
+        CreateDirectoryW(job.stateDir.c_str(), nullptr);
+        SetEnvironmentVariableW(L"BB_LINK_JOURNAL", job.journal.c_str());
+        opt.mode |= linkskip::kJournalBit;
+        bool xpakAbsent = false;
+        if (opt.compactXpak)
+        {
+            const std::string cleaned = xpakclean::Before(job.mapDir, job.map, job.stateDir, xpakAbsent);
+            if (!cleaned.empty()) Say(cleaned.c_str());
+        }
+        unchanged::Tap tap;
+        const bool tapped = tap.Start();
+        const linkskip::Before before = linkskip::Snapshot(job);
+        const int code = Link(real, args, opt, pluginDir, tapped ? &tap : nullptr);
+        const bool complete = tapped && tap.Finish();
+        SetEnvironmentVariableW(L"BB_LINK_JOURNAL", nullptr);
+        const std::string kept = linkskip::Remember(job, before, tap, complete, (DWORD)code);
+        if (opt.compactXpak && kept.empty()) xpakclean::After(job.mapDir, job.map, job.stateDir, xpakAbsent);   // a link good enough to record
+        if (kept.empty())
+        {
+            const std::string content = assetreport::Line(job.mapDir, job.map, job.language, job.stateDir);
+            if (!content.empty()) Say(content.c_str());
+        }
+        if (why.empty())
+        {
+            const std::string diff = linkskip::Compare(job, old, before);
+            Say(("Skip unchanged verify: " + diff + (kept.empty() ? "." : ", not recorded: " + kept + ".")).c_str());
+        }
+        else if (!kept.empty()) Say(("Skip unchanged: this link is not recorded (" + kept + "), the next one runs too.").c_str());
+        DeleteFileW(job.journal.c_str());
+        return code;
+    }
+
+    int Link(const std::wstring& real, const std::vector<std::wstring>& args, const Options& opt, const std::wstring& pluginDir,
+             unchanged::Tap* tap)
     {
         std::wstring line = Quote(real);
         for (const std::wstring& arg : args) line += L" " + Quote(arg);
@@ -90,8 +165,8 @@ namespace
         startup.cb = sizeof startup;
         startup.dwFlags = STARTF_USESTDHANDLES | STARTF_FORCEOFFFEEDBACK;
         startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
-        startup.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
-        startup.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+        startup.hStdOutput = tap ? tap->out.write : GetStdHandle(STD_OUTPUT_HANDLE);
+        startup.hStdError = tap ? tap->err.write : GetStdHandle(STD_ERROR_HANDLE);
         PROCESS_INFORMATION child = {};
         const DWORD flags = CREATE_SUSPENDED | CREATE_NO_WINDOW | (opt.preferPerformance ? ABOVE_NORMAL_PRIORITY_CLASS : 0);
         auto start = [&]() -> DWORD {
@@ -146,6 +221,7 @@ namespace
             power.ControlMask = PROCESS_POWER_THROTTLING_EXECUTION_SPEED;
             SetProcessInformation(child.hProcess, ProcessPowerThrottling, &power, sizeof power);
         }
+        if (tap) tap->ChildStarted();
         if (ResumeThread(child.hThread) == DWORD(-1)) return abort("Could not resume linker_modtools", GetLastError());
         CloseHandle(child.hThread);
         WaitForSingleObject(child.hProcess, INFINITE);
@@ -161,14 +237,16 @@ int wmain(int argc, wchar_t** argv)
 {
     std::wstring real;
     int separator = -1;
+    bool noSkip = false;   // --no-skip: no skip_unchanged decision and no record (PlayTest's forced and throwaway builds)
     for (int i = 1; i < argc; ++i)
     {
         if (!_wcsicmp(argv[i], L"--real") && i + 1 < argc) { real = argv[++i]; continue; }
+        if (!_wcsicmp(argv[i], L"--no-skip")) { noSkip = true; continue; }
         if (!wcscmp(argv[i], L"--")) { separator = i; break; }
     }
     if (real.empty() || separator < 0)
     {
-        fwprintf(stderr, L"usage: BuildPlusLinker --real <linker_modtools.exe> -- <linker arguments>\n");
+        fwprintf(stderr, L"usage: BuildPlusLinker [--no-skip] --real <linker_modtools.exe> -- <linker arguments>\n");
         return 2;
     }
     std::vector<std::wstring> args(argv + separator + 1, argv + argc);
@@ -194,11 +272,18 @@ int wmain(int argc, wchar_t** argv)
     if (GetPrivateProfileIntW(L"linker", L"fast_stat", 1, ini.c_str())) opt.mode |= 1u << 6;
     if (GetPrivateProfileIntW(L"linker", L"fast_recenter", 1, ini.c_str())) opt.mode |= 1u << 7;
     opt.verify = GetPrivateProfileIntW(L"linker", L"verify_patches", 0, ini.c_str()) != 0;
+    {
+        wchar_t value[32] = {};
+        GetPrivateProfileStringW(L"linker", L"skip_unchanged", L"1", value, 32, ini.c_str());
+        opt.skipUnchanged = noSkip ? 0 : !_wcsicmp(value, L"verify") ? 2 : _wtoi(value) ? 1 : 0;
+    }
     if (opt.verify) opt.mode |= 1u << 8;
     if (GetPrivateProfileIntW(L"linker", L"skip_localized", 1, ini.c_str())) opt.mode |= 1u << 9;
     if (GetPrivateProfileIntW(L"linker", L"skip_sound_convert", 1, ini.c_str())) opt.mode |= 1u << 10;
     if (GetPrivateProfileIntW(L"linker", L"autolod_fixes", 1, ini.c_str())) opt.mode |= (1u << 11) | (1u << 12);   // face limit, normals
     if (GetPrivateProfileIntW(L"linker", L"meshopt_lods", 0, ini.c_str())) opt.mode |= 1u << 13;
+    if (GetPrivateProfileIntW(L"linker", L"cache_map_entities", 1, ini.c_str())) opt.mode |= 1u << 15;
+    opt.compactXpak = GetPrivateProfileIntW(L"linker", L"compact_xpak", 1, ini.c_str()) != 0;
     // the runtime DLL reads the auto LOD budget from the environment the linker inherits
     const UINT autoLodBudget = GetPrivateProfileIntW(L"linker", L"autolod_budget_mb", 0, ini.c_str());
     if (autoLodBudget && !GetEnvironmentVariableW(L"BB_AUTOLOD_BUDGET_MB", nullptr, 0))

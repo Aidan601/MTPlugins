@@ -1201,8 +1201,7 @@ namespace
             names.push_back(kEditedName);
         }
         qt.comboSetCurrentIndex(combo, current);
-        ui->SetToolTip(combo, "The look of Radiant (Radiant+ plugin). Classic Treyarch is Radiant's own stylesheet, Treyarch a modern theme in its colours, Classic is Qt's "
-                              "plain Windows look; more themes are .qss files in bin\\themes. Picking one applies it.");
+        ui->SetToolTip(combo, "The look of Radiant. Themes in bin\\themes are shared with APE and the launcher.");
         void* folder = ui->PushButton("Themes Folder", holder);
         ui->SetToolTip(folder, "Open bin\\themes (shared with APE): drop a .qss file there and reopen Preferences");
         rp::host->OnClicked(rp::self, folder, OnOpenFolder, nullptr);
@@ -1643,7 +1642,7 @@ namespace
         if (!box) { g_discordError = "no combo box"; return; }
         for (const char* label : discordrpc::kModeLabels) ui->ComboAdd(box, label);
         ui->ComboSetCurrent(box, discordrpc::GetMode());
-        ui->SetToolTip(box, "Radiant+: what your Discord profile shows while Radiant is in use. Off: nothing. Show the tool: only which tool is open. Show the tool and what is open: also the map, asset or build step. Each tool has its own setting.");
+        ui->SetToolTip(box, "What your Discord profile shows while Radiant is open.");
         void* label = ui->Label("Discord presence:", page);
         const int top = bottom + (above ? 6 : 14);
         qt.setGeometry(label, left + 10, top, 120, 24);
